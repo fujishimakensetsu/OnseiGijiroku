@@ -204,8 +204,25 @@ async function uploadAudio() {
         });
 
         if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'アップロードに失敗しました');
+            // エラーレスポンスの内容を確認
+            const contentType = response.headers.get('content-type');
+            let errorMessage = 'アップロードに失敗しました';
+
+            if (contentType && contentType.includes('application/json')) {
+                try {
+                    const error = await response.json();
+                    errorMessage = error.detail || errorMessage;
+                } catch (e) {
+                    console.error('JSONパースエラー:', e);
+                }
+            } else {
+                // HTMLエラーページが返ってきた場合
+                const text = await response.text();
+                console.error('サーバーエラー:', text);
+                errorMessage = `サーバーエラー (ステータス: ${response.status})`;
+            }
+
+            throw new Error(errorMessage);
         }
 
         updateProgress(70, 'AIで解析中...');
