@@ -102,14 +102,6 @@ class ExportRequest(BaseModel):
 class MergeRequest(BaseModel):
     summaries: List[str]
 
-class UploadUrlRequest(BaseModel):
-    filename: str
-    content_type: str
-
-class UploadUrlResponse(BaseModel):
-    upload_url: str
-    blob_name: str
-
 # 認証用のデコレータ
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """JWTトークンから現在のユーザーを取得"""
@@ -192,13 +184,13 @@ async def login(request: LoginRequest):
             detail="ログイン処理中にエラーが発生しました"
         )
 
-@app.post("/api/generate-upload-url", response_model=UploadUrlResponse)
-async def generate_upload_url(
-    request: UploadUrlRequest,
+@app.post("/api/upload-to-gcs")
+async def upload_to_gcs(
+    file: UploadFile = File(...),
     current_user: str = Depends(get_current_user)
 ):
     """
-    GCSへの署名付きアップロードURLを生成
+    ファイルをGCSにアップロード（バックエンド経由）
     """
     try:
         if not bucket:
@@ -207,65 +199,34 @@ async def generate_upload_url(
                 detail="GCSが設定されていません"
             )
 
-        logger.info(f"ユーザー {current_user} が署名付きURL生成をリクエスト: {request.filename}")
+        logger.info(f"ユーザー {current_user} がファイルをアップロード: {file.filename}")
 
-        # 一意のblob名を生成（ユーザー名とUUIDを含む）
-        file_extension = os.path.splitext(request.filename)[1]
+        # 一意のblob名を生成
+        file_extension = os.path.splitext(file.filename)[1]
         blob_name = f"{current_user}/{uuid.uuid4()}{file_extension}"
 
-        # GCSのblobオブジェクトを作成
+        # GCSにストリーミングアップロード
         blob = bucket.blob(blob_name)
 
-        # GCS resumable upload sessionを作成
-        # これならCloud Runのデフォルト認証情報で動作する
-        from google.auth import default as google_auth_default
-        from google.auth.transport import requests as google_auth_requests
-
-        credentials, _ = google_auth_default()
-        auth_request = google_auth_requests.Request()
-        credentials.refresh(auth_request)
-
-        # Resumable upload sessionを開始
-        upload_url_endpoint = f"https://storage.googleapis.com/upload/storage/v1/b/{GCS_BUCKET_NAME}/o?uploadType=resumable&name={blob_name}"
-
-        session_response = auth_request.session.post(
-            upload_url_endpoint,
-            headers={
-                "Authorization": f"Bearer {credentials.token}",
-                "Content-Type": "application/json",
-                "X-Upload-Content-Type": request.content_type
-            },
-            json={"name": blob_name}
+        # ファイルをチャンクで読み取りながらGCSにアップロード
+        blob.upload_from_file(
+            file.file,
+            content_type=file.content_type or 'application/octet-stream',
+            timeout=600  # 10分タイムアウト
         )
 
-        if session_response.status_code not in [200, 201]:
-            logger.error(f"Resumable upload session作成エラー: {session_response.text}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="アップロードセッションの作成に失敗しました"
-            )
+        logger.info(f"GCSアップロード成功: {blob_name}")
 
-        # session URLを取得
-        upload_url = session_response.headers.get("Location")
-        if not upload_url:
-            logger.error("Location headerが見つかりません")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="アップロードURLの取得に失敗しました"
-            )
-
-        logger.info(f"署名付きURL生成成功: {blob_name}")
-
-        return UploadUrlResponse(
-            upload_url=upload_url,
-            blob_name=blob_name
-        )
+        return {
+            "blob_name": blob_name,
+            "message": "アップロード成功"
+        }
 
     except Exception as e:
-        logger.error(f"署名付きURL生成エラー: {str(e)}")
+        logger.error(f"GCSアップロードエラー: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"署名付きURLの生成中にエラーが発生しました: {str(e)}"
+            detail=f"ファイルのアップロード中にエラーが発生しました: {str(e)}"
         )
 
 @app.post("/api/upload", response_model=MinutesResponse)
