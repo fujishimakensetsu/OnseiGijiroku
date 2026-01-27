@@ -131,7 +131,7 @@ class GeminiService:
 
 上記の全ての記録内容を確認し、情報を漏らさないよう注意して議事録を作成してください。"""
     
-    async def analyze_audio(self, audio_file_path: str) -> Dict[str, Any]:
+    async def analyze_audio(self, audio_file_path: str) -> str:
         """
         音声ファイルをGemini APIで解析
 
@@ -139,7 +139,7 @@ class GeminiService:
             audio_file_path: 解析する音声ファイルのパス
 
         Returns:
-            解析結果（要約と確認事項）
+            解析結果（統合された議事録）
         """
         try:
             logger.info(f"Gemini APIで音声を解析: {audio_file_path}")
@@ -201,29 +201,20 @@ class GeminiService:
                     )
                 else:
                     raise
-            
+
             # レスポンスのパース
             result_text = response.text
             logger.info("解析完了")
-            
-            # 確認事項の抽出
-            confirmation_items = self._extract_confirmation_items(result_text)
-            
-            # 確認事項部分を要約から除去
-            summary = self._remove_confirmation_section(result_text)
-            
+
             # アップロードしたファイルを削除
             try:
                 genai.delete_file(audio_file.name)
                 logger.info("アップロードファイルを削除")
             except Exception as e:
                 logger.warning(f"ファイル削除エラー: {str(e)}")
-            
-            return {
-                "summary": summary.strip(),
-                "confirmation_items": confirmation_items
-            }
-        
+
+            return result_text.strip()
+
         except Exception as e:
             logger.error(f"Gemini API解析エラー: {str(e)}")
             raise
@@ -283,99 +274,3 @@ class GeminiService:
         unique_lines = list(dict.fromkeys(important_lines))
 
         return "【打合せ内容】\n" + "\n".join(unique_lines[:20])
-    
-    def _extract_confirmation_items(self, text: str) -> List[str]:
-        """
-        テキストから確認事項を抽出
-
-        Args:
-            text: 解析結果テキスト
-
-        Returns:
-            確認事項のリスト
-        """
-        items = []
-
-        # 確認事項を含む可能性のあるキーワード
-        keywords = [
-            "確認", "準備", "次回まで", "タスク", "宿題",
-            "検討", "調べる", "調査", "確認事項", "お客様",
-            "【当社】", "【お客様】"
-        ]
-
-        # 「4. 次回までの確認・準備事項」セクションを探す
-        section_markers = [
-            "4. 次回までの確認",
-            "4.次回までの確認",
-            "次回までの確認・準備",
-            "確認・準備事項",
-            "【💡確認事項】",
-            "💡確認事項"
-        ]
-
-        confirmation_section = None
-        for marker in section_markers:
-            if marker in text:
-                parts = text.split(marker, 1)
-                if len(parts) >= 2:
-                    confirmation_section = parts[1]
-                    # 次のセクション（数字.や##で始まる）までを取得
-                    for end_marker in ["\n5.", "\n5 .", "\n##", "\n---"]:
-                        end_idx = confirmation_section.find(end_marker)
-                        if end_idx != -1:
-                            confirmation_section = confirmation_section[:end_idx]
-                    break
-
-        if confirmation_section:
-            # 箇条書きを抽出
-            for line in confirmation_section.split("\n"):
-                line = line.strip()
-                if not line or line.lower() == "なし" or line == "特になし":
-                    continue
-
-                # 箇条書き記号を除去
-                for prefix in ["• ", "- ", "* ", "・"]:
-                    if line.startswith(prefix):
-                        line = line[len(prefix):].strip()
-                        break
-
-                # 数字付き箇条書き（1. 2. など）を除去
-                if line and line[0].isdigit() and ". " in line[:4]:
-                    line = line.split(". ", 1)[1].strip()
-
-                # セクションヘッダーをスキップ
-                if line.startswith("【") and line.endswith("】"):
-                    continue
-
-                if line and len(line) > 3:
-                    items.append(line)
-
-        # テキスト全体から確認キーワードを含む行も抽出
-        if len(items) == 0:
-            for line in text.split("\n"):
-                line = line.strip()
-                for prefix in ["• ", "- ", "* ", "・"]:
-                    if line.startswith(prefix):
-                        line = line[len(prefix):].strip()
-                        break
-
-                if any(kw in line for kw in ["確認する", "検討する", "調べる", "準備する"]):
-                    if line and len(line) > 5 and line not in items:
-                        items.append(line)
-
-        logger.info(f"確認事項を {len(items)} 件抽出")
-        return items[:10]  # 最大10件に制限
-    
-    def _remove_confirmation_section(self, text: str) -> str:
-        """
-        テキストから確認事項セクションを除去
-        （セグメント解析では確認事項セクションは生成されないため、そのまま返す）
-
-        Args:
-            text: 元のテキスト
-
-        Returns:
-            確認事項を除去したテキスト
-        """
-        # 新しいプロンプトでは確認事項は議事録本文に含まれるため、除去しない
-        return text

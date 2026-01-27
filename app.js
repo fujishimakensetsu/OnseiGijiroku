@@ -6,7 +6,6 @@ const API_BASE_URL = window.location.origin.includes('localhost')
 // グローバル変数
 let selectedFile = null;
 let metadata = {};
-let confirmationItems = [];
 
 // 初期化
 document.addEventListener('DOMContentLoaded', () => {
@@ -403,15 +402,8 @@ async function audioBufferToWav(audioBuffer) {
 async function mergeResults(results) {
     const token = localStorage.getItem('access_token');
 
-    // 全てのサマリーと確認事項を収集
+    // 全てのサマリーを収集
     const allSummaries = results.map(r => r.summary);
-    const allConfirmations = [];
-
-    results.forEach(r => {
-        if (r.confirmation_items && r.confirmation_items.length > 0) {
-            allConfirmations.push(...r.confirmation_items);
-        }
-    });
 
     // サーバーAPIを呼び出して統合
     try {
@@ -422,8 +414,7 @@ async function mergeResults(results) {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                summaries: allSummaries,
-                confirmation_items: allConfirmations
+                summaries: allSummaries
             })
         });
 
@@ -435,16 +426,13 @@ async function mergeResults(results) {
 
         return {
             summary: mergedResult.summary,
-            confirmation_items: mergedResult.confirmation_items,
             dynamic_title: results[0].dynamic_title
         };
     } catch (error) {
         console.error('統合エラー:', error);
         // フォールバック：単純結合
-        const uniqueConfirmations = [...new Set(allConfirmations)];
         return {
             summary: allSummaries.join('\n\n---\n\n'),
-            confirmation_items: uniqueConfirmations,
             dynamic_title: results[0].dynamic_title
         };
     }
@@ -458,27 +446,8 @@ function updateProgress(percent, message) {
 
 // 解析結果の表示
 function displayResults(result) {
-    // 要約をテキストエリアに表示
+    // 議事録をテキストエリアに表示
     document.getElementById('summaryText').value = result.summary;
-
-    // 確認事項を表示
-    confirmationItems = result.confirmation_items;
-    const container = document.getElementById('confirmationItems');
-    container.innerHTML = '';
-
-    if (confirmationItems.length === 0) {
-        container.innerHTML = '<p class="text-gray-500">確認事項はありません</p>';
-    } else {
-        confirmationItems.forEach((item, index) => {
-            const div = document.createElement('div');
-            div.className = 'flex items-start space-x-3 p-3 bg-yellow-50 border border-yellow-200 rounded-lg';
-            div.innerHTML = `
-                <input type="checkbox" id="item${index}" class="mt-1 h-5 w-5 text-indigo-600 rounded focus:ring-indigo-500">
-                <label for="item${index}" class="flex-1 text-gray-800 cursor-pointer">${item}</label>
-            `;
-            container.appendChild(div);
-        });
-    }
 
     // ステップ3へ移動
     document.getElementById('uploadSection').classList.add('hidden');
@@ -491,15 +460,6 @@ async function exportDocument(format) {
     const token = localStorage.getItem('access_token');
     const summary = document.getElementById('summaryText').value;
 
-    // 選択された確認事項を取得
-    const selectedItems = [];
-    confirmationItems.forEach((item, index) => {
-        const checkbox = document.getElementById(`item${index}`);
-        if (checkbox && checkbox.checked) {
-            selectedItems.push(item);
-        }
-    });
-
     try {
         const response = await fetch(`${API_BASE_URL}/api/export`, {
             method: 'POST',
@@ -509,7 +469,6 @@ async function exportDocument(format) {
             },
             body: JSON.stringify({
                 summary: summary,
-                selected_items: selectedItems,
                 metadata: metadata,
                 format: format
             })

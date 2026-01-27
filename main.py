@@ -73,18 +73,15 @@ class MetadataInput(BaseModel):
 
 class MinutesResponse(BaseModel):
     summary: str
-    confirmation_items: List[str]
     dynamic_title: str
 
 class ExportRequest(BaseModel):
     summary: str
-    selected_items: List[str]
     metadata: MetadataInput
     format: str  # "word" or "pdf"
 
 class MergeRequest(BaseModel):
     summaries: List[str]
-    confirmation_items: List[str]
 
 # 認証用のデコレータ
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -200,34 +197,24 @@ async def upload_audio(
             # 音声ファイルの処理（圧縮・分割）
             logger.info("音声ファイルの処理を開始")
             processed_files = audio_processor.process_audio(temp_file_path)
-            
+
             # Gemini APIで各セグメントを並列解析
             logger.info(f"{len(processed_files)} 個のセグメントをGeminiで並列解析開始")
 
             # 並列処理でGemini APIを呼び出し
             tasks = [gemini_service.analyze_audio(audio_file) for audio_file in processed_files]
-            results = await asyncio.gather(*tasks)
+            summaries = await asyncio.gather(*tasks)
 
-            # 結果を集約
-            all_summaries = [result["summary"] for result in results]
-            all_confirmations = []
-            for result in results:
-                all_confirmations.extend(result["confirmation_items"])
+            logger.info(f"並列解析完了: {len(summaries)} セグメント")
 
-            logger.info(f"並列解析完了: {len(results)} セグメント")
-            
             # 複数のセグメントがある場合は統合
-            if len(all_summaries) > 1:
-                final_summary = await gemini_service.merge_summaries(all_summaries)
+            if len(summaries) > 1:
+                final_summary = await gemini_service.merge_summaries(summaries)
             else:
-                final_summary = all_summaries[0]
-            
-            # 重複する確認事項を除去
-            unique_confirmations = list(dict.fromkeys(all_confirmations))
-            
+                final_summary = summaries[0]
+
             return MinutesResponse(
                 summary=final_summary,
-                confirmation_items=unique_confirmations,
                 dynamic_title=dynamic_title
             )
         
@@ -279,12 +266,8 @@ async def merge_summaries(
             # Gemini APIで統合
             final_summary = await gemini_service.merge_summaries(request.summaries)
 
-        # 重複する確認事項を除去
-        unique_confirmations = list(dict.fromkeys(request.confirmation_items))
-
         return {
-            "summary": final_summary,
-            "confirmation_items": unique_confirmations
+            "summary": final_summary
         }
 
     except Exception as e:
@@ -304,43 +287,36 @@ async def export_minutes(
     """
     try:
         logger.info(f"ユーザー {current_user} が {request.format} 形式でエクスポート")
-        
-        # 最終的な議事録テキストを作成（選択された確認事項を含む）
-        final_text = request.summary
-        if request.selected_items:
-            final_text += "\n\n【💡確認事項】\n"
-            for item in request.selected_items:
-                final_text += f"• {item}\n"
-        
+
         # ドキュメント生成
         if request.format.lower() == "word":
             output_path = doc_generator.generate_word(
-                final_text, 
+                request.summary,
                 request.metadata.model_dump()
             )
             media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             filename = f"{request.metadata.created_date}_{request.metadata.customer_name}_議事録.docx"
-        
+
         elif request.format.lower() == "pdf":
             output_path = doc_generator.generate_pdf(
-                final_text,
+                request.summary,
                 request.metadata.model_dump()
             )
             media_type = "application/pdf"
             filename = f"{request.metadata.created_date}_{request.metadata.customer_name}_議事録.pdf"
-        
+
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="サポートされていないフォーマットです"
             )
-        
+
         return FileResponse(
             path=output_path,
             media_type=media_type,
             filename=filename
         )
-    
+
     except Exception as e:
         logger.error(f"エクスポートエラー: {str(e)}")
         raise HTTPException(
