@@ -4,7 +4,7 @@ Google Gemini APIを使用した音声解析サービス
 import google.generativeai as genai
 import os
 import logging
-from typing import Dict, List, Any
+from typing import Dict, Any
 import time
 
 logger = logging.getLogger(__name__)
@@ -62,46 +62,15 @@ class GeminiService:
                 "APIキーが正しいか、利用可能なモデルがあるか確認してください。"
             )
         
-        # プロンプトテンプレート
-        # 分割されたセグメントごとのプロンプト（要約記録用）
-        self.segment_prompt = """あなたは注文住宅の営業打合せを記録する専門の書記です。
-この音声ファイルを【最初から最後まで】通して聴き、打合せの要点を記録してください。
+        # 音声解析プロンプト（A4用紙2枚程度の議事録を生成）
+        self.prompt = """あなたは注文住宅会社の優秀な営業アシスタントです。
+この音声ファイルを最初から最後まで聴き、【A4用紙2枚程度】の議事録を作成してください。
 
 【重要な指示】
-・音声の冒頭・中盤・終盤すべてをまんべんなく確認してください
+・音声全体（冒頭・中盤・終盤）をまんべんなく確認してください
 ・全文の文字起こしは不要です。要点を簡潔にまとめてください
-・話された内容のうち、議事録として重要な情報を抽出してください
-
-【記録すべき内容】
-・話し合われた主な議題（箇条書きで簡潔に）
-・間取りや設計に関する要望・変更点
-・設備・仕様についての決定・検討事項
-・予算や費用に関する話（具体的な金額があれば記載）
-・スケジュール・工期に関する話
-・決定した事項（最重要）
-・保留・検討事項
-・次回までの宿題や確認事項
-
-【出力ルール】
-・箇条書きには「・」のみ使用してください
-・「*」「#」「##」は絶対に使用しないでください
-・要点を簡潔にまとめ、冗長な説明は避けてください
+・A4用紙2枚程度（約2000〜3000文字）に収めてください
 ・金額、サイズ、色、品番などの具体的な数値情報は必ず含めてください
-・会話の逐語録ではなく、議事録として必要な情報をまとめてください
-
-音声全体を通して聴き、打合せの要点をまとめてください。"""
-
-        # 統合プロンプト（A4用紙2枚程度に収める）
-        self.merge_prompt = """あなたは注文住宅会社の優秀な営業アシスタントです。
-以下は同じ打合せを分割して記録した内容です。これを【A4用紙2枚程度】の読みやすい議事録にまとめてください。
-
-【最重要指示】
-・分割された記録の【全てのセグメント】に目を通し、打合せ全体の内容を把握してください
-・重複する内容は1回にまとめてください
-・具体的な数字、品番、色、サイズなどの重要な情報は必ず残してください
-・打合せの流れに沿って、時系列で記載してください
-・A4用紙2枚程度（約2000〜3000文字）に収まるよう、要点を簡潔にまとめてください
-・冗長な説明や重複表現は避け、簡潔な文章を心がけてください
 
 【出力形式】必ず以下の5セクション構成で出力してください。
 箇条書きには「・」のみ使用し、「*」「#」は使用しないでください。
@@ -111,13 +80,14 @@ class GeminiService:
 
 2. 打合せ内容
 話し合われた主要な内容を議題ごとに箇条書きで記載
-・各議題は1〜3行程度で簡潔にまとめる
-・具体的な仕様、金額、サイズなどの数値情報は含める
-・細かい会話のやり取りではなく、結論や要点を記載する
+・間取りや設計に関する要望・変更点
+・設備・仕様についての決定・検討事項（キッチン、バス、トイレ、床材、壁紙など）
+・予算や費用に関する話
+・スケジュール・工期に関する話
+・各議題は簡潔にまとめ、具体的な数値情報は含める
 
 3. 決定事項
 この打合せで確定・決定したことを箇条書きで記載
-・決定した仕様や選択を簡潔に
 ・決定事項がない場合は「特になし」
 
 4. 次回までの確認・準備事項
@@ -130,12 +100,7 @@ class GeminiService:
 5. 補足メモ
 その他の気づきや注意点（なければ「特になし」）
 
----
-【分割された記録】
-{summaries}
-
-上記の全てのセグメントに目を通し、打合せ全体の要点をA4用紙2枚程度にまとめてください。
-全文の転記ではなく、議事録として必要な情報を簡潔に記載してください。"""
+音声全体を聴いて、上記形式で議事録を作成してください。"""
     
     async def analyze_audio(self, audio_file_path: str) -> str:
         """
@@ -184,15 +149,15 @@ class GeminiService:
 
             logger.info(f"ファイル処理完了: {audio_file.state.name}")
 
-            # Geminiで解析（セグメント用のプロンプトを使用）
+            # Geminiで解析
             logger.info("Gemini APIに解析リクエストを送信")
             analysis_start_time = time.time()
             try:
                 response = self.model.generate_content(
-                    [self.segment_prompt, audio_file],
+                    [self.prompt, audio_file],
                     generation_config=genai.types.GenerationConfig(
                         temperature=0.3,  # 創造性を抑えて正確性を重視
-                        max_output_tokens=8000,  # 出力トークン数を増やす（4096→8000）
+                        max_output_tokens=8000,
                     )
                 )
                 analysis_time = time.time() - analysis_start_time
@@ -235,71 +200,3 @@ class GeminiService:
             logger.error(f"Gemini API解析エラー: {str(e)}")
             raise
     
-    async def merge_summaries(self, summaries: List[str]) -> str:
-        """
-        複数の議事録要約を統合（A4用紙2枚程度に収める）
-
-        Args:
-            summaries: 統合する要約のリスト
-
-        Returns:
-            統合された要約
-        """
-        try:
-            logger.info(f"{len(summaries)} 個の要約を統合開始")
-
-            # 各要約の文字数をログ出力
-            for i, summary in enumerate(summaries):
-                logger.info(f"セグメント {i+1} の文字数: {len(summary)}")
-
-            # 要約を番号付きで結合
-            numbered_summaries = "\n\n".join(
-                [f"--- セグメント {i+1}/{len(summaries)} ---\n{summary}"
-                 for i, summary in enumerate(summaries)]
-            )
-
-            logger.info(f"統合前の総文字数: {len(numbered_summaries)}")
-
-            prompt = self.merge_prompt.format(summaries=numbered_summaries)
-
-            logger.info("Gemini APIに統合リクエストを送信")
-            logger.info(f"プロンプトの文字数: {len(prompt)}")
-
-            response = self.model.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
-                    temperature=0.2,  # より確実性を重視
-                    max_output_tokens=8000,  # 出力トークン数を増やす（4000→8000）
-                )
-            )
-
-            merged_summary = response.text
-            logger.info(f"要約の統合完了 - 統合後の文字数: {len(merged_summary)}")
-
-            # レスポンスの最初の500文字をログ出力（デバッグ用）
-            logger.debug(f"統合結果の最初の500文字: {merged_summary[:500]}")
-
-            return merged_summary.strip()
-
-        except Exception as e:
-            logger.error(f"要約統合エラー: {str(e)}")
-            logger.warning("フォールバック処理を使用します")
-            # エラーの場合はフォールバック処理
-            return self._fallback_merge(summaries)
-
-    def _fallback_merge(self, summaries: List[str]) -> str:
-        """
-        API呼び出し失敗時のフォールバック統合
-        """
-        # 各セグメントから重要な行だけ抽出
-        important_lines = []
-        for summary in summaries:
-            for line in summary.split('\n'):
-                line = line.strip()
-                if line and line.startswith('・'):
-                    important_lines.append(line)
-
-        # 重複を除去
-        unique_lines = list(dict.fromkeys(important_lines))
-
-        return "【打合せ内容】\n" + "\n".join(unique_lines[:20])

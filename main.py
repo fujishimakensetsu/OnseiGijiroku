@@ -7,11 +7,10 @@ from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional
 import os
 import tempfile
 import logging
-import asyncio
 from datetime import datetime, timedelta
 import jwt
 from dotenv import load_dotenv
@@ -98,9 +97,6 @@ class ExportRequest(BaseModel):
     summary: str
     metadata: MetadataInput
     format: str  # "word" or "pdf"
-
-class MergeRequest(BaseModel):
-    summaries: List[str]
 
 # 認証用のデコレータ
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -296,7 +292,7 @@ async def upload_audio(
 
         # 変数の初期化
         temp_file_path = None
-        processed_files = []
+        processed_file = None
 
         try:
             # GCSからファイルをダウンロード
@@ -310,34 +306,17 @@ async def upload_audio(
 
             logger.info(f"GCSからダウンロード完了: {blob_name} -> {temp_file_path}")
 
-            # 音声ファイルの処理（必要に応じて圧縮・分割）
-            # 大容量ファイルでもGCS経由なので、分割は最小限に
+            # 音声ファイルの処理（圧縮のみ）
             logger.info("音声ファイルの処理を開始")
             processed_files = audio_processor.process_audio(temp_file_path)
+            processed_file = processed_files[0]
 
-            logger.info(f"処理結果: {len(processed_files)} 個のファイルに分割されました")
+            logger.info(f"音声ファイルの圧縮完了")
 
-            # Gemini APIで各セグメントを並列解析
-            logger.info(f"{len(processed_files)} 個のセグメントをGeminiで並列解析開始")
-
-            # 並列処理でGemini APIを呼び出し
-            tasks = [gemini_service.analyze_audio(audio_file) for audio_file in processed_files]
-            summaries = await asyncio.gather(*tasks)
-
-            logger.info(f"並列解析完了: {len(summaries)} セグメント")
-
-            # 各セグメントの文字数をログ出力
-            for i, summary in enumerate(summaries):
-                logger.info(f"セグメント {i+1} の解析結果文字数: {len(summary)}")
-
-            # 複数のセグメントがある場合は統合
-            if len(summaries) > 1:
-                logger.info(f"{len(summaries)} 個のセグメントを統合します")
-                final_summary = await gemini_service.merge_summaries(summaries)
-                logger.info(f"統合完了 - 最終議事録の文字数: {len(final_summary)}")
-            else:
-                logger.info("セグメントは1つのみのため、統合はスキップします")
-                final_summary = summaries[0]
+            # Gemini APIで音声解析
+            logger.info("Gemini APIで音声解析開始")
+            final_summary = await gemini_service.analyze_audio(processed_file)
+            logger.info(f"解析完了 - 議事録の文字数: {len(final_summary)}")
 
             # GCSからファイルを削除（処理完了後）
             try:
@@ -360,54 +339,18 @@ async def upload_audio(
                 except Exception as e:
                     logger.warning(f"一時ファイル削除エラー: {temp_file_path} - {str(e)}")
 
-            for processed_file in processed_files:
-                if os.path.exists(processed_file):
-                    try:
-                        os.unlink(processed_file)
-                        logger.debug(f"処理済みファイル削除: {processed_file}")
-                    except Exception as e:
-                        logger.warning(f"処理済みファイル削除エラー: {processed_file} - {str(e)}")
+            if processed_file and os.path.exists(processed_file):
+                try:
+                    os.unlink(processed_file)
+                    logger.debug(f"処理済みファイル削除: {processed_file}")
+                except Exception as e:
+                    logger.warning(f"処理済みファイル削除エラー: {processed_file} - {str(e)}")
 
     except Exception as e:
         logger.error(f"音声処理エラー: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"音声ファイルの処理中にエラーが発生しました: {str(e)}"
-        )
-
-@app.post("/api/merge")
-async def merge_summaries(
-    request: MergeRequest,
-    current_user: str = Depends(get_current_user)
-):
-    """
-    複数セグメントの要約を統合して1つの議事録にまとめる
-    """
-    try:
-        logger.info(f"ユーザー {current_user} が {len(request.summaries)} 個の要約を統合")
-
-        if len(request.summaries) == 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="統合する要約がありません"
-            )
-
-        # 1つだけの場合はそのまま返す
-        if len(request.summaries) == 1:
-            final_summary = request.summaries[0]
-        else:
-            # Gemini APIで統合
-            final_summary = await gemini_service.merge_summaries(request.summaries)
-
-        return {
-            "summary": final_summary
-        }
-
-    except Exception as e:
-        logger.error(f"要約統合エラー: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"要約の統合中にエラーが発生しました: {str(e)}"
         )
 
 @app.post("/api/export")
