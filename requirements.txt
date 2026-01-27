@@ -11,6 +11,7 @@ bcrypt
 google-cloud-firestore
 google-generativeai
 google-cloud-storage
+google-auth
 
 # 音声処理
 pydub

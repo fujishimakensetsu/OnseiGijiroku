@@ -217,9 +217,11 @@ async def generate_upload_url(
         blob = bucket.blob(blob_name)
 
         # 署名付きURL生成（15分間有効）
-        # Cloud Run環境では、サービスアカウントのメールアドレスを明示的に指定
-        from google.auth import default as google_auth_default
-        credentials, _ = google_auth_default()
+        # Cloud Run環境では、IAM Signerを使用
+        from google.auth import default as google_auth_default, iam
+        from google.auth.transport import requests as google_auth_requests
+
+        credentials, project_id = google_auth_default()
 
         # サービスアカウントのメールアドレスを取得
         service_account_email = os.getenv("SERVICE_ACCOUNT_EMAIL")
@@ -242,12 +244,20 @@ async def generate_upload_url(
                     detail="サービスアカウントの取得に失敗しました"
                 )
 
+        # IAM Signerを使用して署名付きURLを生成
+        auth_request = google_auth_requests.Request()
+        signing_credentials = iam.Signer(
+            auth_request,
+            credentials,
+            service_account_email
+        )
+
         upload_url = blob.generate_signed_url(
             version="v4",
             expiration=timedelta(minutes=15),
             method="PUT",
             content_type=request.content_type,
-            service_account_email=service_account_email
+            credentials=signing_credentials
         )
 
         logger.info(f"署名付きURL生成成功: {blob_name}")
