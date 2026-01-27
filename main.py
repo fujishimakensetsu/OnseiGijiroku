@@ -198,6 +198,8 @@ async def upload_audio(
             logger.info("音声ファイルの処理を開始")
             processed_files = audio_processor.process_audio(temp_file_path)
 
+            logger.info(f"処理結果: {len(processed_files)} 個のファイルに分割されました")
+
             # Gemini APIで各セグメントを並列解析
             logger.info(f"{len(processed_files)} 個のセグメントをGeminiで並列解析開始")
 
@@ -207,10 +209,17 @@ async def upload_audio(
 
             logger.info(f"並列解析完了: {len(summaries)} セグメント")
 
+            # 各セグメントの文字数をログ出力
+            for i, summary in enumerate(summaries):
+                logger.info(f"セグメント {i+1} の解析結果文字数: {len(summary)}")
+
             # 複数のセグメントがある場合は統合
             if len(summaries) > 1:
+                logger.info(f"{len(summaries)} 個のセグメントを統合します")
                 final_summary = await gemini_service.merge_summaries(summaries)
+                logger.info(f"統合完了 - 最終議事録の文字数: {len(final_summary)}")
             else:
+                logger.info("セグメントは1つのみのため、統合はスキップします")
                 final_summary = summaries[0]
 
             return MinutesResponse(

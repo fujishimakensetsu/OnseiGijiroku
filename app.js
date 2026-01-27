@@ -192,37 +192,42 @@ async function uploadAudio() {
         uploadBtn.disabled = true;
         progressSection.classList.remove('hidden');
 
-        // 30MB以下の場合は通常アップロード
+        let finalResult;
+
+        // 30MB以下の場合は通常アップロード（サーバー側で分割・統合）
         if (selectedFile.size <= cloudRunLimit) {
-            return await uploadSingleFile(selectedFile, token);
+            updateProgress(10, 'ファイルをアップロード中...');
+            updateProgress(50, 'AIが音声を解析中...');
+            finalResult = await uploadSingleFile(selectedFile, token);
+            updateProgress(100, '完了！');
+        } else {
+            // 30MB以上の場合は5分ごとに分割してアップロード
+            updateProgress(5, 'ファイルを分割中...');
+            const segments = await splitAudioFile(selectedFile);
+
+            if (!segments || segments.length === 0) {
+                throw new Error('ファイルの分割に失敗しました');
+            }
+
+            updateProgress(10, `${segments.length}個のセグメントをアップロード中...`);
+
+            // 各セグメントをアップロードして解析
+            const allResults = [];
+            for (let i = 0; i < segments.length; i++) {
+                const progress = 10 + ((i + 1) / segments.length) * 60;
+                updateProgress(progress, `セグメント ${i + 1}/${segments.length} を処理中...`);
+
+                const result = await uploadSingleFile(segments[i], token);
+                allResults.push(result);
+            }
+
+            updateProgress(75, 'AIが議事録を1つにまとめています...');
+
+            // 結果を統合
+            finalResult = await mergeResults(allResults);
+
+            updateProgress(100, '完了！');
         }
-
-        // 30MB以上の場合は10分ごとに分割してアップロード
-        updateProgress(5, 'ファイルを分割中...');
-        const segments = await splitAudioFile(selectedFile);
-
-        if (!segments || segments.length === 0) {
-            throw new Error('ファイルの分割に失敗しました');
-        }
-
-        updateProgress(10, `${segments.length}個のセグメントをアップロード中...`);
-
-        // 各セグメントをアップロードして解析
-        const allResults = [];
-        for (let i = 0; i < segments.length; i++) {
-            const progress = 10 + ((i + 1) / segments.length) * 60;
-            updateProgress(progress, `セグメント ${i + 1}/${segments.length} を処理中...`);
-
-            const result = await uploadSingleFile(segments[i], token);
-            allResults.push(result);
-        }
-
-        updateProgress(75, 'AIが議事録を1つにまとめています...');
-
-        // 結果を統合
-        const finalResult = await mergeResults(allResults);
-
-        updateProgress(100, '完了！');
 
         // 結果を表示
         setTimeout(() => {
@@ -239,12 +244,16 @@ async function uploadAudio() {
 
 // 単一ファイルのアップロード
 async function uploadSingleFile(file, token) {
+    console.log(`ファイルをアップロード: ${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)`);
+
     const formData = new FormData();
     formData.append('file', file);
     formData.append('created_date', metadata.created_date);
     formData.append('creator', metadata.creator);
     formData.append('customer_name', metadata.customer_name);
     formData.append('meeting_place', metadata.meeting_place);
+
+    const uploadStartTime = Date.now();
 
     const response = await fetch(`${API_BASE_URL}/api/upload`, {
         method: 'POST',
@@ -253,6 +262,9 @@ async function uploadSingleFile(file, token) {
         },
         body: formData
     });
+
+    const uploadTime = ((Date.now() - uploadStartTime) / 1000).toFixed(2);
+    console.log(`アップロード完了: ${uploadTime}秒`);
 
     if (!response.ok) {
         const contentType = response.headers.get('content-type');
@@ -277,7 +289,7 @@ async function uploadSingleFile(file, token) {
     return await response.json();
 }
 
-// 音声ファイルを5分ごとに分割（WAVファイルサイズを30MB以下に保つため）
+// 音声ファイルを5分ごとに分割（WAVファイルサイズを10MB程度に保つため）
 async function splitAudioFile(file) {
     try {
         const arrayBuffer = await file.arrayBuffer();
@@ -285,7 +297,7 @@ async function splitAudioFile(file) {
         const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
 
         const duration = audioBuffer.duration; // 秒
-        const segmentDuration = 10 * 60; // 10分 = 600秒（モノラル16kHz変換で30MB以下に収まる）
+        const segmentDuration = 5 * 60; // 5分 = 300秒（モノラル16kHz変換で約10MB）
         const numSegments = Math.ceil(duration / segmentDuration);
 
         console.log(`音声ファイル: ${duration}秒, ${numSegments}セグメントに分割`);
@@ -319,9 +331,11 @@ async function splitAudioFile(file) {
             // WAVファイルに変換
             const wavBlob = await audioBufferToWav(segmentBuffer);
             const segmentFile = new File([wavBlob], `segment_${i + 1}.wav`, { type: 'audio/wav' });
+            console.log(`セグメント ${i + 1}: ${(segmentFile.size / (1024 * 1024)).toFixed(2)} MB`);
             segments.push(segmentFile);
         }
 
+        console.log(`合計 ${segments.length} セグメント作成完了`);
         return segments;
     } catch (error) {
         console.error('ファイル分割エラー:', error);
@@ -402,11 +416,16 @@ async function audioBufferToWav(audioBuffer) {
 async function mergeResults(results) {
     const token = localStorage.getItem('access_token');
 
+    console.log(`統合処理開始: ${results.length}個のセグメント`);
+
     // 全てのサマリーを収集
     const allSummaries = results.map(r => r.summary);
 
+    console.log('各セグメントの要約文字数:', allSummaries.map(s => s.length));
+
     // サーバーAPIを呼び出して統合
     try {
+        console.log('サーバーに統合リクエストを送信中...');
         const response = await fetch(`${API_BASE_URL}/api/merge`, {
             method: 'POST',
             headers: {
@@ -419,10 +438,13 @@ async function mergeResults(results) {
         });
 
         if (!response.ok) {
-            throw new Error('統合APIの呼び出しに失敗しました');
+            const errorText = await response.text();
+            console.error('統合API エラーレスポンス:', errorText);
+            throw new Error(`統合APIの呼び出しに失敗しました: ${response.status}`);
         }
 
         const mergedResult = await response.json();
+        console.log('統合完了 - 統合後の文字数:', mergedResult.summary.length);
 
         return {
             summary: mergedResult.summary,
@@ -430,6 +452,7 @@ async function mergeResults(results) {
         };
     } catch (error) {
         console.error('統合エラー:', error);
+        console.warn('フォールバック処理: 単純結合を使用');
         // フォールバック：単純結合
         return {
             summary: allSummaries.join('\n\n---\n\n'),

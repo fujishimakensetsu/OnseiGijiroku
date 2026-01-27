@@ -123,37 +123,29 @@ class AudioProcessor:
                 f"チャンネル: {audio.channels}, サンプルレート: {audio.frame_rate}Hz"
             )
 
-            # 100MB以上のファイル、または1時間以上の音声は必ず圧縮と分割を行う
-            needs_compression = file_size > self.MAX_FILE_SIZE_BYTES
+            # 常に圧縮を適用（Gemini APIへのアップロード時間を短縮）
+            logger.info("音声ファイルを圧縮します（モノラル、16kHz）")
+            audio = self._compress_audio(audio)
+
+            # 100MB以上のファイル、または1時間以上の音声は分割を行う
             needs_split = (
                 file_size > self.MAX_FILE_SIZE_BYTES or
                 len(audio) > self.SEGMENT_DURATION_MS
             )
 
-            if needs_compression or needs_split:
-                logger.info(
-                    f"処理内容 - 圧縮: {'あり' if needs_compression else 'なし'}, "
-                    f"分割: {'あり' if needs_split else 'なし'}"
-                )
+            # 圧縮後のサイズを確認するため一時出力
+            temp_compressed = tempfile.mktemp(suffix=".mp3")
+            audio.export(temp_compressed, format="mp3", bitrate=self.TARGET_BITRATE)
+            compressed_size = os.path.getsize(temp_compressed)
+            logger.info(f"圧縮後サイズ: {compressed_size / (1024 * 1024):.2f} MB")
 
-            # 圧縮処理
-            if needs_compression or needs_split:
-                logger.info("音声ファイルを圧縮します")
-                audio = self._compress_audio(audio)
-
-                # 圧縮後のサイズを確認するため一時出力
-                temp_compressed = tempfile.mktemp(suffix=".mp3")
-                audio.export(temp_compressed, format="mp3", bitrate=self.TARGET_BITRATE)
-                compressed_size = os.path.getsize(temp_compressed)
-                logger.info(f"圧縮後サイズ: {compressed_size / (1024 * 1024):.2f} MB")
-
-                # 圧縮後も100MBを超える場合は強制的に分割
-                if compressed_size > self.MAX_FILE_SIZE_BYTES:
-                    logger.warning(f"圧縮後も {compressed_size / (1024 * 1024):.2f} MB で100MBを超えています。ファイルサイズベースで分割します")
-                    os.unlink(temp_compressed)  # 一時ファイルを削除
-                    return self._split_audio_by_size(audio)
-
+            # 圧縮後も100MBを超える場合は強制的に分割
+            if compressed_size > self.MAX_FILE_SIZE_BYTES:
+                logger.warning(f"圧縮後も {compressed_size / (1024 * 1024):.2f} MB で100MBを超えています。ファイルサイズベースで分割します")
                 os.unlink(temp_compressed)  # 一時ファイルを削除
+                return self._split_audio_by_size(audio)
+
+            os.unlink(temp_compressed)  # 一時ファイルを削除
 
             # 分割処理（時間ベース）
             if needs_split:

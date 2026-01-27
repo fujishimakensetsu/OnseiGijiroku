@@ -142,11 +142,15 @@ class GeminiService:
             解析結果（統合された議事録）
         """
         try:
-            logger.info(f"Gemini APIで音声を解析: {audio_file_path}")
+            # ファイルサイズを取得
+            import os
+            file_size_mb = os.path.getsize(audio_file_path) / (1024 * 1024)
+            logger.info(f"Gemini APIで音声を解析: {audio_file_path} ({file_size_mb:.2f} MB)")
             logger.info(f"使用モデル: {self.model_name}")
 
             # 音声ファイルをアップロード
             try:
+                logger.info("Gemini APIへファイルアップロードを開始...")
                 audio_file = genai.upload_file(path=audio_file_path)
                 logger.info(f"ファイルアップロード完了: {audio_file.name}")
             except Exception as e:
@@ -158,15 +162,16 @@ class GeminiService:
                 )
 
             # アップロード処理の完了を待機
-            max_wait_time = 60  # 最大60秒待機
-            wait_count = 0
+            max_wait_time = 300  # 最大300秒（5分）待機
+            wait_interval = 3  # 3秒ごとにチェック
+            elapsed_time = 0
             while audio_file.state.name == "PROCESSING":
-                if wait_count >= max_wait_time / 2:
-                    raise TimeoutError("ファイル処理がタイムアウトしました")
-                logger.info("ファイル処理中...")
-                time.sleep(2)
+                if elapsed_time >= max_wait_time:
+                    raise TimeoutError(f"ファイル処理がタイムアウトしました（{max_wait_time}秒経過）")
+                logger.info(f"ファイル処理中... ({elapsed_time}秒経過)")
+                time.sleep(wait_interval)
                 audio_file = genai.get_file(audio_file.name)
-                wait_count += 1
+                elapsed_time += wait_interval
 
             if audio_file.state.name == "FAILED":
                 raise ValueError(f"ファイル処理に失敗しました: {audio_file.state.name}")
@@ -230,7 +235,11 @@ class GeminiService:
             統合された要約
         """
         try:
-            logger.info(f"{len(summaries)} 個の要約を統合")
+            logger.info(f"{len(summaries)} 個の要約を統合開始")
+
+            # 各要約の文字数をログ出力
+            for i, summary in enumerate(summaries):
+                logger.info(f"セグメント {i+1} の文字数: {len(summary)}")
 
             # 要約を番号付きで結合
             numbered_summaries = "\n\n".join(
@@ -238,7 +247,11 @@ class GeminiService:
                  for i, summary in enumerate(summaries)]
             )
 
+            logger.info(f"統合前の総文字数: {len(numbered_summaries)}")
+
             prompt = self.merge_prompt.format(summaries=numbered_summaries)
+
+            logger.info("Gemini APIに統合リクエストを送信")
 
             response = self.model.generate_content(
                 prompt,
@@ -249,12 +262,13 @@ class GeminiService:
             )
 
             merged_summary = response.text
-            logger.info("要約の統合完了")
+            logger.info(f"要約の統合完了 - 統合後の文字数: {len(merged_summary)}")
 
             return merged_summary.strip()
 
         except Exception as e:
             logger.error(f"要約統合エラー: {str(e)}")
+            logger.warning("フォールバック処理を使用します")
             # エラーの場合はフォールバック処理
             return self._fallback_merge(summaries)
 
