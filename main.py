@@ -15,6 +15,9 @@ import asyncio
 from datetime import datetime, timedelta
 import jwt
 from dotenv import load_dotenv
+from google.cloud import storage
+from google.auth import default
+import uuid
 
 # .envファイルから環境変数を読み込み
 load_dotenv()
@@ -50,6 +53,22 @@ app.add_middleware(
 # セキュリティ
 security = HTTPBearer()
 
+# GCS設定
+GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
+if GCS_BUCKET_NAME:
+    try:
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(GCS_BUCKET_NAME)
+        logger.info(f"GCS初期化成功: バケット名 = {GCS_BUCKET_NAME}")
+    except Exception as e:
+        logger.warning(f"GCS初期化エラー: {str(e)}")
+        storage_client = None
+        bucket = None
+else:
+    logger.warning("GCS_BUCKET_NAMEが設定されていません。GCS機能は無効です。")
+    storage_client = None
+    bucket = None
+
 # サービスの初期化
 audio_processor = AudioProcessor()
 gemini_service = GeminiService()
@@ -82,6 +101,14 @@ class ExportRequest(BaseModel):
 
 class MergeRequest(BaseModel):
     summaries: List[str]
+
+class UploadUrlRequest(BaseModel):
+    filename: str
+    content_type: str
+
+class UploadUrlResponse(BaseModel):
+    upload_url: str
+    blob_name: str
 
 # 認証用のデコレータ
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -165,9 +192,55 @@ async def login(request: LoginRequest):
             detail="ログイン処理中にエラーが発生しました"
         )
 
+@app.post("/api/generate-upload-url", response_model=UploadUrlResponse)
+async def generate_upload_url(
+    request: UploadUrlRequest,
+    current_user: str = Depends(get_current_user)
+):
+    """
+    GCSへの署名付きアップロードURLを生成
+    """
+    try:
+        if not bucket:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="GCSが設定されていません"
+            )
+
+        logger.info(f"ユーザー {current_user} が署名付きURL生成をリクエスト: {request.filename}")
+
+        # 一意のblob名を生成（ユーザー名とUUIDを含む）
+        file_extension = os.path.splitext(request.filename)[1]
+        blob_name = f"{current_user}/{uuid.uuid4()}{file_extension}"
+
+        # GCSのblobオブジェクトを作成
+        blob = bucket.blob(blob_name)
+
+        # 署名付きURL生成（15分間有効）
+        upload_url = blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(minutes=15),
+            method="PUT",
+            content_type=request.content_type
+        )
+
+        logger.info(f"署名付きURL生成成功: {blob_name}")
+
+        return UploadUrlResponse(
+            upload_url=upload_url,
+            blob_name=blob_name
+        )
+
+    except Exception as e:
+        logger.error(f"署名付きURL生成エラー: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"署名付きURLの生成中にエラーが発生しました: {str(e)}"
+        )
+
 @app.post("/api/upload", response_model=MinutesResponse)
 async def upload_audio(
-    file: UploadFile = File(...),
+    blob_name: str = Form(...),
     created_date: str = Form(...),
     creator: str = Form(...),
     customer_name: str = Form(...),
@@ -175,10 +248,16 @@ async def upload_audio(
     current_user: str = Depends(get_current_user)
 ):
     """
-    音声ファイルをアップロードして議事録を生成
+    GCSから音声ファイルを取得して議事録を生成
     """
     try:
-        logger.info(f"ユーザー {current_user} が音声ファイルをアップロード: {file.filename}")
+        if not bucket:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="GCSが設定されていません"
+            )
+
+        logger.info(f"ユーザー {current_user} がGCSから音声ファイルを処理: {blob_name}")
 
         # 動的タイトルの生成
         dynamic_title = f"{created_date}_{creator}_{customer_name}_{meeting_place}_議事録"
@@ -187,14 +266,20 @@ async def upload_audio(
         temp_file_path = None
         processed_files = []
 
-        # 一時ファイルに保存
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as temp_file:
-            content = await file.read()
-            temp_file.write(content)
-            temp_file_path = temp_file.name
-
         try:
-            # 音声ファイルの処理（圧縮・分割）
+            # GCSからファイルをダウンロード
+            blob = bucket.blob(blob_name)
+
+            # 一時ファイルに保存
+            file_extension = os.path.splitext(blob_name)[1]
+            with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
+                blob.download_to_file(temp_file)
+                temp_file_path = temp_file.name
+
+            logger.info(f"GCSからダウンロード完了: {blob_name} -> {temp_file_path}")
+
+            # 音声ファイルの処理（必要に応じて圧縮・分割）
+            # 大容量ファイルでもGCS経由なので、分割は最小限に
             logger.info("音声ファイルの処理を開始")
             processed_files = audio_processor.process_audio(temp_file_path)
 
@@ -222,11 +307,18 @@ async def upload_audio(
                 logger.info("セグメントは1つのみのため、統合はスキップします")
                 final_summary = summaries[0]
 
+            # GCSからファイルを削除（処理完了後）
+            try:
+                blob.delete()
+                logger.info(f"GCSファイル削除: {blob_name}")
+            except Exception as e:
+                logger.warning(f"GCSファイル削除エラー: {blob_name} - {str(e)}")
+
             return MinutesResponse(
                 summary=final_summary,
                 dynamic_title=dynamic_title
             )
-        
+
         finally:
             # 一時ファイルのクリーンアップ
             if temp_file_path and os.path.exists(temp_file_path):
@@ -243,7 +335,7 @@ async def upload_audio(
                         logger.debug(f"処理済みファイル削除: {processed_file}")
                     except Exception as e:
                         logger.warning(f"処理済みファイル削除エラー: {processed_file} - {str(e)}")
-    
+
     except Exception as e:
         logger.error(f"音声処理エラー: {str(e)}")
         raise HTTPException(

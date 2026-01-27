@@ -1,6 +1,6 @@
 // API設定
-const API_BASE_URL = window.location.origin.includes('localhost') 
-    ? 'http://localhost:8080' 
+const API_BASE_URL = window.location.origin.includes('localhost')
+    ? 'http://localhost:8080'
     : window.location.origin;
 
 // グローバル変数
@@ -136,10 +136,10 @@ function handleFile(file) {
         return;
     }
 
-    // ファイルサイズチェック（最大500MB）
-    const maxSize = 500 * 1024 * 1024; // 500MB
+    // ファイルサイズチェック（最大2GB - GCS経由）
+    const maxSize = 2 * 1024 * 1024 * 1024; // 2GB
     if (file.size > maxSize) {
-        alert(`ファイルサイズが大きすぎます (${formatFileSize(file.size)})。500MB以下のファイルを選択してください。`);
+        alert(`ファイルサイズが大きすぎます (${formatFileSize(file.size)})。2GB以下のファイルを選択してください。`);
         return;
     }
 
@@ -147,15 +147,9 @@ function handleFile(file) {
 
     // ファイル情報表示
     const fileSizeText = formatFileSize(file.size);
-    const cloudRunLimit = 30 * 1024 * 1024;
 
     document.getElementById('fileName').textContent = file.name;
     document.getElementById('fileSize').textContent = fileSizeText;
-
-    // 30MB超の場合は自動分割の案内を表示
-    if (file.size > cloudRunLimit) {
-        document.getElementById('fileSize').textContent = `${fileSizeText} (自動的に5分ごとに分割してアップロードします)`;
-    }
 
     document.getElementById('fileInfo').classList.remove('hidden');
     document.getElementById('uploadBtn').disabled = false;
@@ -176,7 +170,7 @@ function formatFileSize(bytes) {
     return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
 }
 
-// 音声アップロードと解析（自動分割対応）
+// 音声アップロードと解析（GCS経由）
 async function uploadAudio() {
     if (!selectedFile) {
         alert('ファイルを選択してください');
@@ -186,53 +180,24 @@ async function uploadAudio() {
     const token = localStorage.getItem('access_token');
     const uploadBtn = document.getElementById('uploadBtn');
     const progressSection = document.getElementById('uploadProgress');
-    const cloudRunLimit = 30 * 1024 * 1024; // 30MB
 
     try {
         uploadBtn.disabled = true;
         progressSection.classList.remove('hidden');
 
-        let finalResult;
+        // ステップ1: 署名付きURLを取得
+        updateProgress(5, '署名付きURLを取得中...');
+        const { upload_url, blob_name } = await generateUploadUrl(selectedFile, token);
 
-        // 30MB以下の場合は通常アップロード（サーバー側で分割・統合）
-        if (selectedFile.size <= cloudRunLimit) {
-            updateProgress(10, 'ファイルをアップロード中...');
-            updateProgress(30, 'AIが音声を解析中...（数分かかる場合があります）');
-            finalResult = await uploadSingleFile(selectedFile, token);
-            updateProgress(100, '完了！');
-        } else {
-            // 30MB以上の場合は3分ごとに分割してアップロード
-            updateProgress(5, 'ファイルを分割中...');
-            const segments = await splitAudioFile(selectedFile);
+        // ステップ2: GCSへ直接アップロード
+        updateProgress(10, 'GCSへファイルをアップロード中...');
+        await uploadToGCS(upload_url, selectedFile);
+        updateProgress(30, 'アップロード完了');
 
-            if (!segments || segments.length === 0) {
-                throw new Error('ファイルの分割に失敗しました');
-            }
-
-            updateProgress(10, `${segments.length}個のセグメントをアップロード中...`);
-
-            // 各セグメントをアップロードして解析
-            const allResults = [];
-            for (let i = 0; i < segments.length; i++) {
-                const progress = 10 + ((i + 1) / segments.length) * 60;
-                const estimatedTime = Math.ceil((segments.length - i) * 2); // 1セグメント約2分と仮定
-                updateProgress(
-                    progress,
-                    `セグメント ${i + 1}/${segments.length} を音声解析中...（残り約${estimatedTime}分）`
-                );
-
-                const result = await uploadSingleFile(segments[i], token);
-                allResults.push(result);
-                console.log(`セグメント ${i + 1}/${segments.length} の解析完了`);
-            }
-
-            updateProgress(75, 'AIが議事録を1つにまとめています...');
-
-            // 結果を統合
-            finalResult = await mergeResults(allResults);
-
-            updateProgress(100, '完了！');
-        }
+        // ステップ3: バックエンドで音声解析
+        updateProgress(40, 'AIが音声を解析中...（数分かかる場合があります）');
+        const finalResult = await processAudioFromGCS(blob_name, token);
+        updateProgress(100, '完了！');
 
         // 結果を表示
         setTimeout(() => {
@@ -247,25 +212,68 @@ async function uploadAudio() {
     }
 }
 
-// 単一ファイルのアップロード
-async function uploadSingleFile(file, token) {
-    console.log(`ファイルをアップロード: ${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)`);
+// GCS署名付きURL取得
+async function generateUploadUrl(file, token) {
+    console.log(`署名付きURL取得: ${file.name}`);
+
+    const response = await fetch(`${API_BASE_URL}/api/generate-upload-url`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            filename: file.name,
+            content_type: file.type || 'audio/mpeg'
+        })
+    });
+
+    if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.detail || '署名付きURLの取得に失敗しました');
+    }
+
+    return await response.json();
+}
+
+// GCSへ直接アップロード
+async function uploadToGCS(uploadUrl, file) {
+    console.log(`GCSへアップロード: ${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)`);
+
+    const response = await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: {
+            'Content-Type': file.type || 'audio/mpeg'
+        },
+        body: file
+    });
+
+    if (!response.ok) {
+        throw new Error(`GCSアップロードに失敗しました (ステータス: ${response.status})`);
+    }
+
+    console.log('GCSアップロード完了');
+}
+
+// バックエンドで音声解析
+async function processAudioFromGCS(blobName, token) {
+    console.log(`音声解析開始: ${blobName}`);
 
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append('blob_name', blobName);
     formData.append('created_date', metadata.created_date);
     formData.append('creator', metadata.creator);
     formData.append('customer_name', metadata.customer_name);
     formData.append('meeting_place', metadata.meeting_place);
 
-    const uploadStartTime = Date.now();
+    const startTime = Date.now();
 
-    // タイムアウトを10分に設定
+    // タイムアウトを15分に設定（大容量ファイル対応）
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
-        console.warn('リクエストがタイムアウトしました（10分経過）');
+        console.warn('リクエストがタイムアウトしました（15分経過）');
         controller.abort();
-    }, 10 * 60 * 1000); // 10分
+    }, 15 * 60 * 1000); // 15分
 
     try {
         const response = await fetch(`${API_BASE_URL}/api/upload`, {
@@ -279,12 +287,12 @@ async function uploadSingleFile(file, token) {
 
         clearTimeout(timeoutId);
 
-        const uploadTime = ((Date.now() - uploadStartTime) / 1000).toFixed(2);
-        console.log(`処理完了: ${uploadTime}秒`);
+        const processingTime = ((Date.now() - startTime) / 1000).toFixed(2);
+        console.log(`処理完了: ${processingTime}秒`);
 
         if (!response.ok) {
             const contentType = response.headers.get('content-type');
-            let errorMessage = 'アップロードに失敗しました';
+            let errorMessage = '音声解析に失敗しました';
 
             if (contentType && contentType.includes('application/json')) {
                 try {
@@ -306,186 +314,9 @@ async function uploadSingleFile(file, token) {
     } catch (error) {
         clearTimeout(timeoutId);
         if (error.name === 'AbortError') {
-            throw new Error('処理がタイムアウトしました（10分）。音声ファイルが長すぎる可能性があります。');
+            throw new Error('処理がタイムアウトしました（15分）。音声ファイルが非常に長い可能性があります。');
         }
         throw error;
-    }
-}
-
-// 音声ファイルを3分ごとに分割（WAVファイルサイズを6MB程度に保つため）
-async function splitAudioFile(file) {
-    try {
-        const arrayBuffer = await file.arrayBuffer();
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-
-        const duration = audioBuffer.duration; // 秒
-        const segmentDuration = 3 * 60; // 3分 = 180秒（モノラル16kHz変換で約6MB）
-        const numSegments = Math.ceil(duration / segmentDuration);
-
-        console.log(`音声ファイル: ${duration}秒, ${numSegments}セグメントに分割`);
-
-        const segments = [];
-        const sampleRate = audioBuffer.sampleRate;
-
-        for (let i = 0; i < numSegments; i++) {
-            const startTime = i * segmentDuration;
-            const endTime = Math.min((i + 1) * segmentDuration, duration);
-            const startSample = Math.floor(startTime * sampleRate);
-            const endSample = Math.floor(endTime * sampleRate);
-            const segmentLength = endSample - startSample;
-
-            // 新しいAudioBufferを作成
-            const segmentBuffer = audioContext.createBuffer(
-                audioBuffer.numberOfChannels,
-                segmentLength,
-                sampleRate
-            );
-
-            // データをコピー
-            for (let channel = 0; channel < audioBuffer.numberOfChannels; channel++) {
-                const sourceData = audioBuffer.getChannelData(channel);
-                const segmentData = segmentBuffer.getChannelData(channel);
-                for (let j = 0; j < segmentLength; j++) {
-                    segmentData[j] = sourceData[startSample + j];
-                }
-            }
-
-            // WAVファイルに変換
-            const wavBlob = await audioBufferToWav(segmentBuffer);
-            const segmentFile = new File([wavBlob], `segment_${i + 1}.wav`, { type: 'audio/wav' });
-            console.log(`セグメント ${i + 1}: ${(segmentFile.size / (1024 * 1024)).toFixed(2)} MB`);
-            segments.push(segmentFile);
-        }
-
-        console.log(`合計 ${segments.length} セグメント作成完了`);
-        return segments;
-    } catch (error) {
-        console.error('ファイル分割エラー:', error);
-        throw new Error('ファイルの分割に失敗しました。ブラウザがWeb Audio APIをサポートしていない可能性があります。');
-    }
-}
-
-// AudioBufferをWAVファイルに変換（モノラル・16kHzで圧縮）
-async function audioBufferToWav(audioBuffer) {
-    // モノラルに変換してサイズを削減
-    const numChannels = 1; // モノラル
-    const targetSampleRate = 16000; // 16kHz（音声認識に十分）
-    const format = 1; // PCM
-    const bitDepth = 16;
-
-    // ダウンサンプリング
-    const originalSampleRate = audioBuffer.sampleRate;
-    const sampleRateRatio = originalSampleRate / targetSampleRate;
-    const newLength = Math.floor(audioBuffer.length / sampleRateRatio);
-
-    // モノラルデータを作成（複数チャンネルの場合は平均化）
-    const monoData = new Float32Array(newLength);
-    for (let i = 0; i < newLength; i++) {
-        const originalIndex = Math.floor(i * sampleRateRatio);
-        let sum = 0;
-        for (let channel = 0; channel < audioBuffer.numberOfChannels; channel++) {
-            sum += audioBuffer.getChannelData(channel)[originalIndex];
-        }
-        monoData[i] = sum / audioBuffer.numberOfChannels;
-    }
-
-    const bytesPerSample = bitDepth / 8;
-    const blockAlign = numChannels * bytesPerSample;
-
-    const data = [];
-    for (let i = 0; i < newLength; i++) {
-        const sample = monoData[i];
-        const int16 = Math.max(-1, Math.min(1, sample)) * 0x7FFF;
-        data.push(int16);
-    }
-
-    const dataLength = data.length * bytesPerSample;
-    const buffer = new ArrayBuffer(44 + dataLength);
-    const view = new DataView(buffer);
-
-    // WAVヘッダーを書き込む
-    const writeString = (offset, string) => {
-        for (let i = 0; i < string.length; i++) {
-            view.setUint8(offset + i, string.charCodeAt(i));
-        }
-    };
-
-    writeString(0, 'RIFF');
-    view.setUint32(4, 36 + dataLength, true);
-    writeString(8, 'WAVE');
-    writeString(12, 'fmt ');
-    view.setUint32(16, 16, true); // fmt chunk size
-    view.setUint16(20, format, true);
-    view.setUint16(22, numChannels, true);
-    view.setUint32(24, targetSampleRate, true);
-    view.setUint32(28, targetSampleRate * blockAlign, true);
-    view.setUint16(32, blockAlign, true);
-    view.setUint16(34, bitDepth, true);
-    writeString(36, 'data');
-    view.setUint32(40, dataLength, true);
-
-    // PCMデータを書き込む
-    let offset = 44;
-    for (let i = 0; i < data.length; i++) {
-        view.setInt16(offset, data[i], true);
-        offset += 2;
-    }
-
-    return new Blob([buffer], { type: 'audio/wav' });
-}
-
-// 複数セグメントの解析結果を統合（サーバーAPIで統合）
-async function mergeResults(results) {
-    const token = localStorage.getItem('access_token');
-
-    console.log(`統合処理開始: ${results.length}個のセグメント`);
-
-    // 全てのサマリーを収集
-    const allSummaries = results.map(r => r.summary);
-
-    console.log('各セグメントの要約文字数:', allSummaries.map(s => s.length));
-
-    // 各セグメントの最初の100文字を表示
-    allSummaries.forEach((summary, i) => {
-        console.log(`セグメント ${i + 1} の内容 (最初の100文字):`, summary.substring(0, 100));
-    });
-
-    // サーバーAPIを呼び出して統合
-    try {
-        console.log('サーバーに統合リクエストを送信中...');
-        const response = await fetch(`${API_BASE_URL}/api/merge`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                summaries: allSummaries
-            })
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('統合API エラーレスポンス:', errorText);
-            throw new Error(`統合APIの呼び出しに失敗しました: ${response.status}`);
-        }
-
-        const mergedResult = await response.json();
-        console.log('統合完了 - 統合後の文字数:', mergedResult.summary.length);
-
-        return {
-            summary: mergedResult.summary,
-            dynamic_title: results[0].dynamic_title
-        };
-    } catch (error) {
-        console.error('統合エラー:', error);
-        console.warn('フォールバック処理: 単純結合を使用');
-        // フォールバック：単純結合
-        return {
-            summary: allSummaries.join('\n\n---\n\n'),
-            dynamic_title: results[0].dynamic_title
-        };
     }
 }
 
