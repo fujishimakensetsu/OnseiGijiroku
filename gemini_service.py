@@ -65,75 +65,73 @@ class GeminiService:
             )
         
         # プロンプトテンプレート
-        # 分割されたセグメントごとのプロンプト（簡易版）
-        self.segment_prompt = """あなたは優秀な書記です。以下の音声内容を解析し、内容を詳細に記録してください。
+        # 分割されたセグメントごとのプロンプト（詳細記録用）
+        self.segment_prompt = """あなたは注文住宅の営業打合せを記録する専門の書記です。
+この音声の内容を詳細に聞き取り、打合せの内容を漏れなく記録してください。
+
+【記録すべき内容】
+・話し合われた全ての議題と内容
+・間取りや設計に関する要望・変更点の詳細
+・設備・仕様についての話（キッチン、バス、トイレ、床材、壁紙など）
+・予算や費用に関する具体的な話
+・スケジュール・工期に関する話
+・お客様からの質問や要望
+・営業担当からの説明や提案
+・決定した事項
+・保留・検討事項
+・次回までの宿題や確認事項
+
+【出力ルール】
+・箇条書きには「・」のみ使用してください
+・「*」「#」「##」は絶対に使用しないでください
+・話された内容を具体的に記録してください
+・金額、サイズ、色、品番などの具体的な情報は必ず含めてください
+・お客様の発言と営業の発言が区別できる場合は明記してください
+
+音声内容を解析して、打合せ記録を作成してください。"""
+
+        # 統合プロンプト（A4用紙2枚程度に収める）
+        self.merge_prompt = """あなたは注文住宅会社の優秀な営業アシスタントです。
+以下は同じ打合せを分割して記録した内容です。これを1つの読みやすい議事録にまとめてください。
 
 【重要な指示】
-1. 音声の内容を全て聞き取り、内容を要約して打合せの議事録を作成してください。
-2. 箇条書きには「・」（中黒）のみを使用してください
-3. 「*」（アスタリスク）や「#」（ハッシュ）は使用しないでください
-4. この音声セグメントで話された内容を、話の文脈から重要な要点をまとめて記録してください。
-5. 決定事項やアクション項目があれば特に明記してください
+・分割された記録の内容を全て確認し、重要な情報は漏らさず含めてください
+・重複する内容は1回のみ記載してください
+・具体的な数字、品番、色、サイズなどの情報は必ず残してください
+・出力はA4用紙2枚程度（約2000〜2500文字）を目安にしてください
 
-【出力形式】
-話された内容を読みやすくまとめて出力してください。箇条書き（・）を使用して整理してください。
+【出力形式】必ず以下の5セクション構成で出力してください。
+箇条書きには「・」のみ使用し、「*」「#」は使用しないでください。
 
-音声内容を解析してください。"""
+1. 打合せ概要
+打合せの目的や主なテーマを2〜3行で記載
 
-        self.merge_prompt = """以下は同じ会議を時間ごとに分割して解析した複数の記録です。
-これらを統合して、読みやすく整理された1つの議事録にまとめてください。
+2. 打合せ内容
+話し合われた内容を具体的に箇条書きで記載してください。
+・議題ごとに内容をまとめる
+・具体的な仕様、金額、サイズなどの情報を含める
+・お客様の要望や質問も記載する
+・営業からの説明や提案も記載する
 
-【統合の指示】
-1. 全ての分割記録の内容から重要な内容は必ず含めてください
-2. 重複する内容があれば削除し、一度だけ記載してください
-3. 時系列順に整理し、会議全体の流れが分かるようにしてください
-4. 箇条書きには「・」（中黒）のみを使用してください
-5. 「*」（アスタリスク）や「#」（ハッシュ）は絶対に使用しないでください
-6. 5つのセクションに「 1.」～「 5.」の形式で必ず整理してください
-7. 各セクションは明確に分けて、読みやすく構成してください
-8. 決定事項とネクストアクションは特に丁寧にまとめてください
+3. 決定事項
+この打合せで確定・決定したことを明確に箇条書きで記載
+・決定した仕様や選択
+・合意した内容
 
-【必須出力形式】
-## 1. 会議の概要
-（会議全体の目的、参加者、主なテーマを2-3行で簡潔に記載）
+4. 次回までの確認・準備事項
+【お客様】
+・お客様側で確認・準備すること
+【当社】
+・会社側で確認・準備すること
 
-## 2. 議論内容
-（議論された内容を時系列で、「・」を使って箇条書きで整理）
-
-・（最初の議題）
-   内容の詳細説明
-
-・（次の議題）
-   内容の詳細説明
-
-・（さらに次の議題）
-   内容の詳細説明
-
-## 3. 決定事項
-（会議で決まったことを「・」で箇条書きにして明確に記載）
-
-・（決定事項1）
-・（決定事項2）
-・（決定事項3）
-
-## 4. ネクストアクション
-（次に実施すべき行動を、担当者と期限を含めて「・」で箇条書きに記載）
-
-・（アクション1）- 担当: XX、期限: XX
-・（アクション2）- 担当: XX、期限: XX
-・（アクション3）- 担当: XX、期限: XX
-
-## 5. 補足・確認事項
-（追加の補足情報や、後で確認が必要な事項があれば「・」で箇条書きに記載、なければ「なし」）
-
-・（補足事項1）
-・（確認事項1）
+5. 補足メモ
+その他の気づきや注意点（なければ「特になし」）
 
 ---
 【分割された記録】
 {summaries}
 
-上記の分割記録を統合して、上記の5つのセクション形式で出力してください。"""
+上記の全ての記録内容を確認し、情報を漏らさないよう注意して議事録を作成してください。"""
     
     async def analyze_audio(self, audio_file_path: str) -> Dict[str, Any]:
         """
@@ -234,104 +232,152 @@ class GeminiService:
     
     async def merge_summaries(self, summaries: List[str]) -> str:
         """
-        複数の議事録要約を統合
-        
+        複数の議事録要約を統合（A4用紙2枚程度に収める）
+
         Args:
             summaries: 統合する要約のリスト
-            
+
         Returns:
             統合された要約
         """
         try:
             logger.info(f"{len(summaries)} 個の要約を統合")
-            
+
             # 要約を番号付きで結合
             numbered_summaries = "\n\n".join(
-                [f"--- セグメント {i+1} ---\n{summary}" 
+                [f"--- セグメント {i+1}/{len(summaries)} ---\n{summary}"
                  for i, summary in enumerate(summaries)]
             )
-            
+
             prompt = self.merge_prompt.format(summaries=numbered_summaries)
-            
+
             response = self.model.generate_content(
                 prompt,
                 generation_config=genai.types.GenerationConfig(
-                    temperature=0.3,
-                    max_output_tokens=8192,
+                    temperature=0.2,  # より確実性を重視
+                    max_output_tokens=4000,  # A4 2枚程度（約2000-2500文字）に収める
                 )
             )
-            
+
             merged_summary = response.text
             logger.info("要約の統合完了")
-            
+
             return merged_summary.strip()
-        
+
         except Exception as e:
             logger.error(f"要約統合エラー: {str(e)}")
-            # エラーの場合は単純に結合
-            return "\n\n".join(summaries)
+            # エラーの場合はフォールバック処理
+            return self._fallback_merge(summaries)
+
+    def _fallback_merge(self, summaries: List[str]) -> str:
+        """
+        API呼び出し失敗時のフォールバック統合
+        """
+        # 各セグメントから重要な行だけ抽出
+        important_lines = []
+        for summary in summaries:
+            for line in summary.split('\n'):
+                line = line.strip()
+                if line and line.startswith('・'):
+                    important_lines.append(line)
+
+        # 重複を除去
+        unique_lines = list(dict.fromkeys(important_lines))
+
+        return "【打合せ内容】\n" + "\n".join(unique_lines[:20])
     
     def _extract_confirmation_items(self, text: str) -> List[str]:
         """
         テキストから確認事項を抽出
-        
+
         Args:
             text: 解析結果テキスト
-            
+
         Returns:
             確認事項のリスト
         """
         items = []
-        
-        # 【💡確認事項】セクションを探す
-        if "【💡確認事項】" in text or "💡確認事項" in text:
-            # セクションを分割
-            parts = text.split("【💡確認事項】")
-            if len(parts) < 2:
-                parts = text.split("💡確認事項")
-            
-            if len(parts) >= 2:
-                confirmation_section = parts[1]
-                
-                # 次のセクション（##で始まる）までを取得
-                next_section_idx = confirmation_section.find("\n##")
-                if next_section_idx != -1:
-                    confirmation_section = confirmation_section[:next_section_idx]
-                
-                # 箇条書きを抽出（•、-、*、数字.で始まる行）
-                for line in confirmation_section.split("\n"):
-                    line = line.strip()
-                    if not line or line.lower() == "なし":
-                        continue
-                    
-                    # 箇条書き記号を除去
-                    for prefix in ["• ", "- ", "* ", "・"]:
-                        if line.startswith(prefix):
-                            line = line[len(prefix):].strip()
-                            break
-                    
-                    # 数字付き箇条書き（1. 2. など）を除去
-                    if line and line[0].isdigit() and ". " in line[:4]:
-                        line = line.split(". ", 1)[1].strip()
-                    
-                    if line:
+
+        # 確認事項を含む可能性のあるキーワード
+        keywords = [
+            "確認", "準備", "次回まで", "タスク", "宿題",
+            "検討", "調べる", "調査", "確認事項", "お客様",
+            "【当社】", "【お客様】"
+        ]
+
+        # 「4. 次回までの確認・準備事項」セクションを探す
+        section_markers = [
+            "4. 次回までの確認",
+            "4.次回までの確認",
+            "次回までの確認・準備",
+            "確認・準備事項",
+            "【💡確認事項】",
+            "💡確認事項"
+        ]
+
+        confirmation_section = None
+        for marker in section_markers:
+            if marker in text:
+                parts = text.split(marker, 1)
+                if len(parts) >= 2:
+                    confirmation_section = parts[1]
+                    # 次のセクション（数字.や##で始まる）までを取得
+                    for end_marker in ["\n5.", "\n5 .", "\n##", "\n---"]:
+                        end_idx = confirmation_section.find(end_marker)
+                        if end_idx != -1:
+                            confirmation_section = confirmation_section[:end_idx]
+                    break
+
+        if confirmation_section:
+            # 箇条書きを抽出
+            for line in confirmation_section.split("\n"):
+                line = line.strip()
+                if not line or line.lower() == "なし" or line == "特になし":
+                    continue
+
+                # 箇条書き記号を除去
+                for prefix in ["• ", "- ", "* ", "・"]:
+                    if line.startswith(prefix):
+                        line = line[len(prefix):].strip()
+                        break
+
+                # 数字付き箇条書き（1. 2. など）を除去
+                if line and line[0].isdigit() and ". " in line[:4]:
+                    line = line.split(". ", 1)[1].strip()
+
+                # セクションヘッダーをスキップ
+                if line.startswith("【") and line.endswith("】"):
+                    continue
+
+                if line and len(line) > 3:
+                    items.append(line)
+
+        # テキスト全体から確認キーワードを含む行も抽出
+        if len(items) == 0:
+            for line in text.split("\n"):
+                line = line.strip()
+                for prefix in ["• ", "- ", "* ", "・"]:
+                    if line.startswith(prefix):
+                        line = line[len(prefix):].strip()
+                        break
+
+                if any(kw in line for kw in ["確認する", "検討する", "調べる", "準備する"]):
+                    if line and len(line) > 5 and line not in items:
                         items.append(line)
-        
+
         logger.info(f"確認事項を {len(items)} 件抽出")
-        return items
+        return items[:10]  # 最大10件に制限
     
     def _remove_confirmation_section(self, text: str) -> str:
         """
         テキストから確認事項セクションを除去
-        
+        （セグメント解析では確認事項セクションは生成されないため、そのまま返す）
+
         Args:
             text: 元のテキスト
-            
+
         Returns:
             確認事項を除去したテキスト
         """
-        if "【💡確認事項】" in text:
-            return text.split("【💡確認事項】")[0].strip()
-        elif "💡確認事項" in text:
-            return text.split("💡確認事項")[0].strip()
+        # 新しいプロンプトでは確認事項は議事録本文に含まれるため、除去しない
         return text

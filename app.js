@@ -218,7 +218,7 @@ async function uploadAudio() {
             allResults.push(result);
         }
 
-        updateProgress(75, '全セグメントの結果を統合中...');
+        updateProgress(75, 'AIが議事録を1つにまとめています...');
 
         // 結果を統合
         const finalResult = await mergeResults(allResults);
@@ -399,10 +399,12 @@ async function audioBufferToWav(audioBuffer) {
     return new Blob([buffer], { type: 'audio/wav' });
 }
 
-// 複数セグメントの解析結果を統合
+// 複数セグメントの解析結果を統合（サーバーAPIで統合）
 async function mergeResults(results) {
-    // 全てのサマリーと確認事項を結合
-    const allSummaries = results.map(r => r.summary).join('\n\n---\n\n');
+    const token = localStorage.getItem('access_token');
+
+    // 全てのサマリーと確認事項を収集
+    const allSummaries = results.map(r => r.summary);
     const allConfirmations = [];
 
     results.forEach(r => {
@@ -411,14 +413,41 @@ async function mergeResults(results) {
         }
     });
 
-    // 重複する確認事項を除去
-    const uniqueConfirmations = [...new Set(allConfirmations)];
+    // サーバーAPIを呼び出して統合
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/merge`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                summaries: allSummaries,
+                confirmation_items: allConfirmations
+            })
+        });
 
-    return {
-        summary: allSummaries,
-        confirmation_items: uniqueConfirmations,
-        dynamic_title: results[0].dynamic_title
-    };
+        if (!response.ok) {
+            throw new Error('統合APIの呼び出しに失敗しました');
+        }
+
+        const mergedResult = await response.json();
+
+        return {
+            summary: mergedResult.summary,
+            confirmation_items: mergedResult.confirmation_items,
+            dynamic_title: results[0].dynamic_title
+        };
+    } catch (error) {
+        console.error('統合エラー:', error);
+        // フォールバック：単純結合
+        const uniqueConfirmations = [...new Set(allConfirmations)];
+        return {
+            summary: allSummaries.join('\n\n---\n\n'),
+            confirmation_items: uniqueConfirmations,
+            dynamic_title: results[0].dynamic_title
+        };
+    }
 }
 
 function updateProgress(percent, message) {

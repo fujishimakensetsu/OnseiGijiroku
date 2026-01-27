@@ -82,6 +82,10 @@ class ExportRequest(BaseModel):
     metadata: MetadataInput
     format: str  # "word" or "pdf"
 
+class MergeRequest(BaseModel):
+    summaries: List[str]
+    confirmation_items: List[str]
+
 # 認証用のデコレータ
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """JWTトークンから現在のユーザーを取得"""
@@ -249,6 +253,45 @@ async def upload_audio(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"音声ファイルの処理中にエラーが発生しました: {str(e)}"
+        )
+
+@app.post("/api/merge")
+async def merge_summaries(
+    request: MergeRequest,
+    current_user: str = Depends(get_current_user)
+):
+    """
+    複数セグメントの要約を統合して1つの議事録にまとめる
+    """
+    try:
+        logger.info(f"ユーザー {current_user} が {len(request.summaries)} 個の要約を統合")
+
+        if len(request.summaries) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="統合する要約がありません"
+            )
+
+        # 1つだけの場合はそのまま返す
+        if len(request.summaries) == 1:
+            final_summary = request.summaries[0]
+        else:
+            # Gemini APIで統合
+            final_summary = await gemini_service.merge_summaries(request.summaries)
+
+        # 重複する確認事項を除去
+        unique_confirmations = list(dict.fromkeys(request.confirmation_items))
+
+        return {
+            "summary": final_summary,
+            "confirmation_items": unique_confirmations
+        }
+
+    except Exception as e:
+        logger.error(f"要約統合エラー: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"要約の統合中にエラーが発生しました: {str(e)}"
         )
 
 @app.post("/api/export")
