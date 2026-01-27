@@ -197,11 +197,11 @@ async function uploadAudio() {
         // 30MB以下の場合は通常アップロード（サーバー側で分割・統合）
         if (selectedFile.size <= cloudRunLimit) {
             updateProgress(10, 'ファイルをアップロード中...');
-            updateProgress(50, 'AIが音声を解析中...');
+            updateProgress(30, 'AIが音声を解析中...（数分かかる場合があります）');
             finalResult = await uploadSingleFile(selectedFile, token);
             updateProgress(100, '完了！');
         } else {
-            // 30MB以上の場合は5分ごとに分割してアップロード
+            // 30MB以上の場合は3分ごとに分割してアップロード
             updateProgress(5, 'ファイルを分割中...');
             const segments = await splitAudioFile(selectedFile);
 
@@ -215,10 +215,15 @@ async function uploadAudio() {
             const allResults = [];
             for (let i = 0; i < segments.length; i++) {
                 const progress = 10 + ((i + 1) / segments.length) * 60;
-                updateProgress(progress, `セグメント ${i + 1}/${segments.length} を処理中...`);
+                const estimatedTime = Math.ceil((segments.length - i) * 2); // 1セグメント約2分と仮定
+                updateProgress(
+                    progress,
+                    `セグメント ${i + 1}/${segments.length} を音声解析中...（残り約${estimatedTime}分）`
+                );
 
                 const result = await uploadSingleFile(segments[i], token);
                 allResults.push(result);
+                console.log(`セグメント ${i + 1}/${segments.length} の解析完了`);
             }
 
             updateProgress(75, 'AIが議事録を1つにまとめています...');
@@ -255,41 +260,59 @@ async function uploadSingleFile(file, token) {
 
     const uploadStartTime = Date.now();
 
-    const response = await fetch(`${API_BASE_URL}/api/upload`, {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${token}`
-        },
-        body: formData
-    });
+    // タイムアウトを10分に設定
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+        console.warn('リクエストがタイムアウトしました（10分経過）');
+        controller.abort();
+    }, 10 * 60 * 1000); // 10分
 
-    const uploadTime = ((Date.now() - uploadStartTime) / 1000).toFixed(2);
-    console.log(`アップロード完了: ${uploadTime}秒`);
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/upload`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`
+            },
+            body: formData,
+            signal: controller.signal
+        });
 
-    if (!response.ok) {
-        const contentType = response.headers.get('content-type');
-        let errorMessage = 'アップロードに失敗しました';
+        clearTimeout(timeoutId);
 
-        if (contentType && contentType.includes('application/json')) {
-            try {
-                const error = await response.json();
-                errorMessage = error.detail || errorMessage;
-            } catch (e) {
-                console.error('JSONパースエラー:', e);
+        const uploadTime = ((Date.now() - uploadStartTime) / 1000).toFixed(2);
+        console.log(`処理完了: ${uploadTime}秒`);
+
+        if (!response.ok) {
+            const contentType = response.headers.get('content-type');
+            let errorMessage = 'アップロードに失敗しました';
+
+            if (contentType && contentType.includes('application/json')) {
+                try {
+                    const error = await response.json();
+                    errorMessage = error.detail || errorMessage;
+                } catch (e) {
+                    console.error('JSONパースエラー:', e);
+                }
+            } else {
+                const text = await response.text();
+                console.error('サーバーエラー:', text);
+                errorMessage = `サーバーエラー (ステータス: ${response.status})`;
             }
-        } else {
-            const text = await response.text();
-            console.error('サーバーエラー:', text);
-            errorMessage = `サーバーエラー (ステータス: ${response.status})`;
+
+            throw new Error(errorMessage);
         }
 
-        throw new Error(errorMessage);
+        return await response.json();
+    } catch (error) {
+        clearTimeout(timeoutId);
+        if (error.name === 'AbortError') {
+            throw new Error('処理がタイムアウトしました（10分）。音声ファイルが長すぎる可能性があります。');
+        }
+        throw error;
     }
-
-    return await response.json();
 }
 
-// 音声ファイルを5分ごとに分割（WAVファイルサイズを10MB程度に保つため）
+// 音声ファイルを3分ごとに分割（WAVファイルサイズを6MB程度に保つため）
 async function splitAudioFile(file) {
     try {
         const arrayBuffer = await file.arrayBuffer();
@@ -297,7 +320,7 @@ async function splitAudioFile(file) {
         const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
 
         const duration = audioBuffer.duration; // 秒
-        const segmentDuration = 5 * 60; // 5分 = 300秒（モノラル16kHz変換で約10MB）
+        const segmentDuration = 3 * 60; // 3分 = 180秒（モノラル16kHz変換で約6MB）
         const numSegments = Math.ceil(duration / segmentDuration);
 
         console.log(`音声ファイル: ${duration}秒, ${numSegments}セグメントに分割`);

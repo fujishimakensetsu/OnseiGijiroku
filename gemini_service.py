@@ -183,6 +183,7 @@ class GeminiService:
 
             # Geminiで解析（セグメント用のプロンプトを使用）
             logger.info("Gemini APIに解析リクエストを送信")
+            analysis_start_time = time.time()
             try:
                 response = self.model.generate_content(
                     [self.segment_prompt, audio_file],
@@ -191,6 +192,8 @@ class GeminiService:
                         max_output_tokens=8000,  # 出力トークン数を増やす（4096→8000）
                     )
                 )
+                analysis_time = time.time() - analysis_start_time
+                logger.info(f"Gemini API解析完了 - 処理時間: {analysis_time:.2f}秒")
             except Exception as e:
                 error_msg = str(e)
                 logger.error(f"generate_contentエラー: {error_msg}")
