@@ -170,7 +170,7 @@ function formatFileSize(bytes) {
     return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
 }
 
-// 音声アップロードと解析（バックエンド経由でGCSへ）
+// 音声アップロードと解析（署名付きURL経由でGCSへ）
 async function uploadAudio() {
     if (!selectedFile) {
         alert('ファイルを選択してください');
@@ -185,12 +185,16 @@ async function uploadAudio() {
         uploadBtn.disabled = true;
         progressSection.classList.remove('hidden');
 
-        // ステップ1: バックエンド経由でGCSへアップロード
-        updateProgress(5, 'ファイルをアップロード中...');
-        const { blob_name } = await uploadFileToBackend(selectedFile, token);
+        // ステップ1: 署名付きURLを取得
+        updateProgress(5, '署名付きURLを取得中...');
+        const { upload_url, blob_name } = await generateUploadUrl(selectedFile, token);
+
+        // ステップ2: GCSへ直接アップロード（Cloud Run制限を回避）
+        updateProgress(10, 'GCSへファイルをアップロード中...');
+        await uploadToGCS(upload_url, selectedFile);
         updateProgress(30, 'アップロード完了');
 
-        // ステップ2: バックエンドで音声解析
+        // ステップ3: バックエンドで音声解析
         updateProgress(40, 'AIが音声を解析中...（数分かかる場合があります）');
         const finalResult = await processAudioFromGCS(blob_name, token);
         updateProgress(100, '完了！');
@@ -208,63 +212,49 @@ async function uploadAudio() {
     }
 }
 
-// バックエンド経由でファイルをGCSにアップロード
-async function uploadFileToBackend(file, token) {
-    console.log(`ファイルをアップロード: ${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)`);
+// 署名付きURL取得
+async function generateUploadUrl(file, token) {
+    console.log(`署名付きURL取得: ${file.name}`);
 
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append('filename', file.name);
+    formData.append('content_type', file.type || 'audio/mpeg');
 
-    // タイムアウトを15分に設定（大容量ファイル対応）
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => {
-        console.warn('アップロードがタイムアウトしました（15分経過）');
-        controller.abort();
-    }, 15 * 60 * 1000); // 15分
+    const response = await fetch(`${API_BASE_URL}/api/generate-upload-url`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${token}`
+        },
+        body: formData
+    });
 
-    try {
-        const response = await fetch(`${API_BASE_URL}/api/upload-to-gcs`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`
-            },
-            body: formData,
-            signal: controller.signal
-        });
-
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-            const contentType = response.headers.get('content-type');
-            let errorMessage = 'アップロードに失敗しました';
-
-            if (contentType && contentType.includes('application/json')) {
-                try {
-                    const error = await response.json();
-                    errorMessage = error.detail || errorMessage;
-                } catch (e) {
-                    console.error('JSONパースエラー:', e);
-                }
-            } else {
-                const text = await response.text();
-                console.error('サーバーエラー:', text);
-                errorMessage = `サーバーエラー (ステータス: ${response.status})`;
-            }
-
-            throw new Error(errorMessage);
-        }
-
-        const result = await response.json();
-        console.log('アップロード完了:', result.blob_name);
-        return result;
-
-    } catch (error) {
-        clearTimeout(timeoutId);
-        if (error.name === 'AbortError') {
-            throw new Error('アップロードがタイムアウトしました（15分）。ファイルが大きすぎる可能性があります。');
-        }
-        throw error;
+    if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.detail || '署名付きURLの取得に失敗しました');
     }
+
+    return await response.json();
+}
+
+// GCSへ直接アップロード
+async function uploadToGCS(uploadUrl, file) {
+    console.log(`GCSへアップロード: ${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)`);
+
+    const response = await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: {
+            'Content-Type': file.type || 'audio/mpeg'
+        },
+        body: file
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        console.error('GCSアップロードエラー:', errorText);
+        throw new Error(`GCSアップロードに失敗しました (ステータス: ${response.status})`);
+    }
+
+    console.log('GCSアップロード完了');
 }
 
 // バックエンドで音声解析

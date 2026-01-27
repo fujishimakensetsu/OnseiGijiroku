@@ -193,13 +193,14 @@ async def login(request: LoginRequest):
             detail="ログイン処理中にエラーが発生しました"
         )
 
-@app.post("/api/upload-to-gcs")
-async def upload_to_gcs(
-    file: UploadFile = File(...),
+@app.post("/api/generate-upload-url")
+async def generate_upload_url(
+    filename: str = Form(...),
+    content_type: str = Form(...),
     current_user: str = Depends(get_current_user)
 ):
     """
-    ファイルをGCSにアップロード（バックエンド経由）
+    GCSへの署名付きアップロードURLを生成（IAM Credentials API使用）
     """
     try:
         if not bucket:
@@ -208,34 +209,65 @@ async def upload_to_gcs(
                 detail="GCSが設定されていません"
             )
 
-        logger.info(f"ユーザー {current_user} がファイルをアップロード: {file.filename}")
+        logger.info(f"ユーザー {current_user} が署名付きURL生成をリクエスト: {filename}")
 
         # 一意のblob名を生成
-        file_extension = os.path.splitext(file.filename)[1]
+        file_extension = os.path.splitext(filename)[1]
         blob_name = f"{current_user}/{uuid.uuid4()}{file_extension}"
 
-        # GCSにストリーミングアップロード
+        # GCSのblobオブジェクトを作成
         blob = bucket.blob(blob_name)
 
-        # ファイルをチャンクで読み取りながらGCSにアップロード
-        blob.upload_from_file(
-            file.file,
-            content_type=file.content_type or 'application/octet-stream',
-            timeout=600  # 10分タイムアウト
+        # サービスアカウント情報を取得
+        from google.auth import default as google_auth_default
+        from google.auth.transport import requests as google_auth_requests
+
+        credentials, _ = google_auth_default()
+        auth_request = google_auth_requests.Request()
+        credentials.refresh(auth_request)
+
+        # メタデータサーバーからサービスアカウントのメールを取得
+        import urllib.request
+        try:
+            metadata_server = "http://metadata.google.internal/computeMetadata/v1/"
+            req = urllib.request.Request(
+                metadata_server + 'instance/service-accounts/default/email',
+                headers={'Metadata-Flavor': 'Google'}
+            )
+            with urllib.request.urlopen(req, timeout=2) as response:
+                service_account_email = response.read().decode('utf-8')
+            logger.info(f"サービスアカウント: {service_account_email}")
+        except Exception as e:
+            logger.error(f"サービスアカウント取得エラー: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="サービスアカウントの取得に失敗しました"
+            )
+
+        # 署名付きURL生成（IAM Credentials APIを使用）
+        upload_url = blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(minutes=15),
+            method="PUT",
+            content_type=content_type,
+            service_account_email=service_account_email,
+            access_token=credentials.token
         )
 
-        logger.info(f"GCSアップロード成功: {blob_name}")
+        logger.info(f"署名付きURL生成成功: {blob_name}")
 
         return {
-            "blob_name": blob_name,
-            "message": "アップロード成功"
+            "upload_url": upload_url,
+            "blob_name": blob_name
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"GCSアップロードエラー: {str(e)}")
+        logger.error(f"署名付きURL生成エラー: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"ファイルのアップロード中にエラーが発生しました: {str(e)}"
+            detail=f"署名付きURLの生成中にエラーが発生しました: {str(e)}"
         )
 
 @app.post("/api/upload", response_model=MinutesResponse)
