@@ -1,5 +1,5 @@
-# Python 3.13をベースイメージとして使用
-FROM python:3.13-slim
+# Python 3.12をベースイメージとして使用（3.13ではaudioopが削除されpydubが動作しないため）
+FROM python:3.12-slim
 
 # 作業ディレクトリを設定
 WORKDIR /app
