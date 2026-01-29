@@ -107,6 +107,7 @@ function updateStepIndicator(currentStep) {
     // ステップの状態を更新
     [1, 2, 3].forEach(s => {
         const stepElement = document.getElementById(`step${s}`);
+        if (!stepElement) return;
 
         // クラスをリセット
         stepElement.classList.remove('active', 'completed');
@@ -119,17 +120,6 @@ function updateStepIndicator(currentStep) {
             stepElement.classList.add('active');
         }
     });
-
-    // コネクターの状態を更新
-    const connector1 = document.getElementById('connector1');
-    const connector2 = document.getElementById('connector2');
-
-    if (connector1) {
-        connector1.classList.toggle('completed', currentStep > 1);
-    }
-    if (connector2) {
-        connector2.classList.toggle('completed', currentStep > 2);
-    }
 }
 
 // ファイル処理
