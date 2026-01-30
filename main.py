@@ -76,7 +76,6 @@ doc_generator = DocumentGenerator()
 
 # リクエスト/レスポンスモデル
 class LoginRequest(BaseModel):
-    username: str
     password: str
 
 class LoginResponse(BaseModel):
@@ -166,13 +165,13 @@ async def health_check():
 
 @app.post("/api/auth/login", response_model=LoginResponse)
 async def login(request: LoginRequest):
-    """ログインエンドポイント"""
+    """ログインエンドポイント（パスワードのみ）"""
     try:
-        user = await auth_service.authenticate_user(request.username, request.password)
+        user = await auth_service.authenticate_password(request.password)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="ユーザー名またはパスワードが正しくありません"
+                detail="アクセスコードが正しくありません"
             )
 
         # JWTトークンの生成
@@ -182,6 +181,8 @@ async def login(request: LoginRequest):
 
         return LoginResponse(access_token=access_token)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"ログインエラー: {str(e)}")
         raise HTTPException(

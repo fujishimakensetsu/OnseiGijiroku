@@ -41,7 +41,7 @@
             position: relative;
         }
 
-        /* グリッド背景 */
+        /* Grid background */
         body::before {
             content: '';
             position: absolute;
@@ -56,7 +56,7 @@
         .container {
             position: relative;
             width: 100%;
-            max-width: 420px;
+            max-width: 400px;
             animation: slideIn 0.4s ease-out;
         }
 
@@ -71,7 +71,7 @@
             }
         }
 
-        /* ヘッダーライン */
+        /* Header line */
         .header-line {
             display: flex;
             align-items: center;
@@ -101,7 +101,7 @@
             position: relative;
         }
 
-        /* 角の装飾 */
+        /* Corner decorations */
         .card::before {
             content: '';
             position: absolute;
@@ -134,8 +134,8 @@
         }
 
         .logo-icon {
-            width: 64px;
-            height: 64px;
+            width: 72px;
+            height: 72px;
             background: var(--navy-900);
             display: flex;
             align-items: center;
@@ -152,7 +152,7 @@
         }
 
         .logo-icon i {
-            font-size: 1.5rem;
+            font-size: 1.75rem;
             color: var(--blue-400);
         }
 
@@ -171,19 +171,20 @@
         }
 
         .form-group {
-            margin-bottom: 1.25rem;
+            margin-bottom: 1.5rem;
         }
 
         .form-label {
             display: flex;
             align-items: center;
+            justify-content: center;
             gap: 0.5rem;
             font-size: 0.75rem;
             font-weight: 600;
             color: var(--navy-800);
             letter-spacing: 0.05em;
             text-transform: uppercase;
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.75rem;
         }
 
         .form-label i {
@@ -193,9 +194,11 @@
 
         .form-input {
             width: 100%;
-            padding: 0.875rem 1rem;
-            font-size: 0.9375rem;
+            padding: 1rem 1.25rem;
+            font-size: 1rem;
             font-family: inherit;
+            text-align: center;
+            letter-spacing: 0.1em;
             border: 2px solid var(--gray-200);
             background: var(--gray-100);
             color: var(--navy-900);
@@ -204,6 +207,7 @@
 
         .form-input::placeholder {
             color: var(--gray-400);
+            letter-spacing: 0.05em;
         }
 
         .form-input:focus {
@@ -223,6 +227,7 @@
         .error-box.show {
             display: flex;
             align-items: center;
+            justify-content: center;
             gap: 0.625rem;
             animation: shake 0.3s ease;
         }
@@ -282,50 +287,6 @@
             margin-right: 0.625rem;
         }
 
-        .demo-section {
-            margin-top: 1.5rem;
-            padding-top: 1.5rem;
-            border-top: 1px solid var(--gray-200);
-        }
-
-        .demo-title {
-            font-size: 0.6875rem;
-            font-weight: 600;
-            color: var(--gray-400);
-            letter-spacing: 0.15em;
-            text-transform: uppercase;
-            margin-bottom: 0.75rem;
-        }
-
-        .demo-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 0.75rem;
-        }
-
-        .demo-item {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.625rem 0.875rem;
-            background: var(--gray-100);
-            border: 1px solid var(--gray-200);
-        }
-
-        .demo-item-label {
-            font-size: 0.6875rem;
-            color: var(--gray-400);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }
-
-        .demo-item-value {
-            font-size: 0.8125rem;
-            font-weight: 600;
-            color: var(--navy-800);
-            font-family: 'SF Mono', Monaco, Consolas, monospace;
-        }
-
         .footer-text {
             text-align: center;
             margin-top: 1.5rem;
@@ -339,7 +300,7 @@
 <body>
     <div class="container">
         <div class="header-line">
-            <span>System Login</span>
+            <span>System Access</span>
         </div>
 
         <div class="card">
@@ -355,31 +316,15 @@
                 <form id="loginForm" autocomplete="off">
                     <div class="form-group">
                         <label class="form-label">
-                            <i class="fas fa-user"></i>
-                            ユーザー名
-                        </label>
-                        <input
-                            type="text"
-                            id="username"
-                            name="username"
-                            class="form-input"
-                            placeholder="Enter username"
-                            autocomplete="off"
-                            required
-                        >
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">
-                            <i class="fas fa-lock"></i>
-                            パスワード
+                            <i class="fas fa-key"></i>
+                            アクセスコード
                         </label>
                         <input
                             type="password"
                             id="password"
                             name="password"
                             class="form-input"
-                            placeholder="Enter password"
+                            placeholder="Enter access code"
                             autocomplete="new-password"
                             required
                         >
@@ -392,27 +337,9 @@
 
                     <button type="submit" class="submit-btn">
                         <i class="fas fa-arrow-right"></i>
-                        ログイン
+                        アクセス
                     </button>
                 </form>
-
-                <div class="demo-section">
-                    <p class="demo-title">Demo Account</p>
-                    <div class="demo-grid">
-                        <div class="demo-item">
-                            <div>
-                                <p class="demo-item-label">User</p>
-                                <p class="demo-item-value">demo</p>
-                            </div>
-                        </div>
-                        <div class="demo-item">
-                            <div>
-                                <p class="demo-item-label">Pass</p>
-                                <p class="demo-item-value">demo123</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
             </div>
         </div>
 
@@ -427,7 +354,6 @@
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
             e.preventDefault();
 
-            const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
             const errorMessage = document.getElementById('errorMessage');
             const errorText = document.getElementById('errorText');
@@ -436,18 +362,18 @@
                 const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password })
+                    body: JSON.stringify({ password })
                 });
 
                 const data = await response.json();
 
                 if (response.ok) {
                     localStorage.setItem('access_token', data.access_token);
-                    localStorage.setItem('username', username);
+                    localStorage.setItem('username', 'user');
                     window.location.href = 'dashboard.html';
                 } else {
                     errorMessage.classList.add('show');
-                    errorText.textContent = data.detail || 'ログインに失敗しました';
+                    errorText.textContent = data.detail || 'アクセスコードが正しくありません';
                 }
             } catch (error) {
                 errorMessage.classList.add('show');
@@ -455,10 +381,8 @@
             }
         });
 
-        ['username', 'password'].forEach(id => {
-            document.getElementById(id).addEventListener('input', () => {
-                document.getElementById('errorMessage').classList.remove('show');
-            });
+        document.getElementById('password').addEventListener('input', () => {
+            document.getElementById('errorMessage').classList.remove('show');
         });
     </script>
 </body>

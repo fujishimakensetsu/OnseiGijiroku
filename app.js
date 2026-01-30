@@ -16,10 +16,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
     }
 
-    // ユーザー名表示
-    const username = localStorage.getItem('username');
-    document.getElementById('currentUser').textContent = username || 'ユーザー';
-
     // 今日の日付をデフォルト設定
     const today = new Date().toISOString().split('T')[0];
     document.getElementById('createdDate').value = today;
