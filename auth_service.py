@@ -38,6 +38,10 @@ class AuthService:
             認証成功時はユーザー情報、失敗時はNone
         """
         try:
+            # デバッグ: 環境変数の状態をログ出力
+            logger.info(f"環境変数APP_ACCESS_PASSWORD設定状況: {'設定済み' if os.getenv('APP_ACCESS_PASSWORD') else '未設定'}")
+            logger.info(f"使用中のパスワード長: {len(self.access_password) if self.access_password else 0}")
+
             # パスワードの検証
             if password == self.access_password:
                 logger.info("パスワード認証成功")
@@ -46,7 +50,7 @@ class AuthService:
                     "name": "ユーザー"
                 }
             else:
-                logger.warning("パスワードが一致しません")
+                logger.warning(f"パスワードが一致しません（入力長: {len(password)}, 期待長: {len(self.access_password) if self.access_password else 0}）")
                 return None
 
         except Exception as e:

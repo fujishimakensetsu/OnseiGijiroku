@@ -228,17 +228,28 @@ class DocumentGenerator:
                 logger.error(f"PDF初期化エラー: {str(e)}")
                 raise
 
-            pdf.set_auto_page_break(auto=True, margin=20)
+            # ページ設定
+            pdf.set_auto_page_break(auto=True, margin=25)
+            pdf.set_margins(left=20, top=20, right=20)
             pdf.add_page()
 
-            # タイトル
-            pdf.set_japanese_font(20)
-            pdf.cell(0, 15, '議事録', new_x="LMARGIN", new_y="NEXT", align='C')
-            pdf.ln(10)
+            # 有効なページ幅を計算
+            effective_width = pdf.w - pdf.l_margin - pdf.r_margin
 
-            # メタデータ
-            pdf.set_japanese_font(9)
-            pdf.set_text_color(80, 80, 80)
+            # ===== ヘッダー部分 =====
+            # タイトル背景
+            pdf.set_fill_color(10, 22, 40)  # ダークネイビー
+            pdf.rect(pdf.l_margin, pdf.get_y(), effective_width, 18, 'F')
+
+            # タイトルテキスト
+            pdf.set_text_color(255, 255, 255)
+            pdf.set_japanese_font(16)
+            pdf.cell(effective_width, 18, '議 事 録', align='C')
+            pdf.ln(22)
+
+            # ===== メタデータテーブル =====
+            pdf.set_text_color(0, 0, 0)
+
             meta_items = [
                 ('作成日', str(metadata.get('created_date', '') or '')),
                 ('作成者', str(metadata.get('creator', '') or '')),
@@ -246,66 +257,113 @@ class DocumentGenerator:
                 ('打合せ場所', str(metadata.get('meeting_place', '') or ''))
             ]
 
-            for label, value in meta_items:
+            # テーブルヘッダー背景色
+            label_bg = (240, 240, 245)  # 薄いグレー
+            cell_height = 8
+            label_width = 35
+            value_width = (effective_width - label_width * 2) / 2
+
+            # 2列レイアウトでメタデータを表示
+            for i in range(0, len(meta_items), 2):
+                # 左側
+                pdf.set_fill_color(*label_bg)
                 pdf.set_japanese_font(9)
-                pdf.cell(30, 6, f"{label}:")
-                pdf.cell(0, 6, value, new_x="LMARGIN", new_y="NEXT")
+                pdf.set_text_color(80, 80, 80)
+                pdf.cell(label_width, cell_height, meta_items[i][0], border=1, fill=True, align='C')
+                pdf.set_text_color(0, 0, 0)
+                pdf.cell(value_width, cell_height, meta_items[i][1], border=1, align='L')
 
-            pdf.ln(10)
-            pdf.set_text_color(0, 0, 0)
+                # 右側
+                if i + 1 < len(meta_items):
+                    pdf.set_fill_color(*label_bg)
+                    pdf.set_text_color(80, 80, 80)
+                    pdf.cell(label_width, cell_height, meta_items[i + 1][0], border=1, fill=True, align='C')
+                    pdf.set_text_color(0, 0, 0)
+                    pdf.cell(value_width, cell_height, meta_items[i + 1][1], border=1, align='L')
 
+                pdf.ln(cell_height)
+
+            pdf.ln(8)
+
+            # ===== 区切り線 =====
+            pdf.set_draw_color(200, 200, 200)
+            pdf.line(pdf.l_margin, pdf.get_y(), pdf.l_margin + effective_width, pdf.get_y())
+            pdf.ln(8)
+
+            # ===== 本文 =====
             # Markdown記号を変換
             content = self._convert_markdown_symbols(content)
 
-            # 本文を処理
             lines = content.split('\n')
-            # 有効なページ幅を計算
-            effective_width = pdf.w - pdf.l_margin - pdf.r_margin
-            indent_width = 10
+            indent_width = 8
+            current_section = None
 
             for line in lines:
                 line = line.strip()
 
                 if not line:
-                    pdf.ln(3)
+                    pdf.ln(4)
                     continue
 
-                # ## で始まる行、または「1. 」〜「9. 」で始まる行は大見出し
+                # ## で始まる行は大見出し
                 if line.startswith('##'):
                     heading_text = line.replace('##', '').strip()
-                    pdf.ln(5)
-                    pdf.set_japanese_font(14)
-                    pdf.set_text_color(44, 62, 80)
-                    pdf.multi_cell(effective_width, 8, heading_text)
+                    pdf.ln(6)
+                    # 見出し背景
+                    pdf.set_fill_color(37, 99, 235)  # ブルー
+                    pdf.set_text_color(255, 255, 255)
+                    pdf.set_japanese_font(11)
+                    pdf.cell(effective_width, 10, f'  {heading_text}', fill=True)
+                    pdf.ln(12)
                     pdf.set_text_color(0, 0, 0)
-                    pdf.ln(2)
+                    current_section = heading_text
+
+                # 「1. 」〜「9. 」で始まる行は番号付き見出し
                 elif re.match(r'^[1-9]\.\s', line):
-                    # 「1. 打合せ概要」のような形式
-                    pdf.ln(5)
-                    pdf.set_japanese_font(14)
-                    pdf.set_text_color(44, 62, 80)
-                    pdf.multi_cell(effective_width, 8, line)
+                    pdf.ln(6)
+                    # 見出し背景
+                    pdf.set_fill_color(37, 99, 235)  # ブルー
+                    pdf.set_text_color(255, 255, 255)
+                    pdf.set_japanese_font(11)
+                    pdf.cell(effective_width, 10, f'  {line}', fill=True)
+                    pdf.ln(12)
                     pdf.set_text_color(0, 0, 0)
-                    pdf.ln(2)
+                    current_section = line
 
                 # ・で始まる行は箇条書き
                 elif line.startswith('・') or line.startswith('•') or line.startswith('- ') or line.startswith('* '):
                     pdf.set_japanese_font(10)
+                    pdf.set_text_color(0, 0, 0)
+
+                    # 箇条書き記号を統一
+                    for prefix in ['・', '• ', '- ', '* ']:
+                        if line.startswith(prefix):
+                            line = line[len(prefix):].strip()
+                            break
+
                     # インデント付きで表示
                     pdf.set_x(pdf.l_margin + indent_width)
-                    pdf.multi_cell(effective_width - indent_width, 6, line)
+                    pdf.set_text_color(37, 99, 235)  # ブルー
+                    pdf.cell(5, 7, '●', align='L')
+                    pdf.set_text_color(0, 0, 0)
+                    pdf.multi_cell(effective_width - indent_width - 5, 7, line)
 
                 # 通常のテキスト
                 else:
                     pdf.set_japanese_font(10)
-                    pdf.multi_cell(effective_width, 6, line)
+                    pdf.set_text_color(40, 40, 40)
+                    pdf.multi_cell(effective_width, 7, line)
 
-            # フッター
+            # ===== フッター =====
             pdf.ln(15)
-            pdf.set_japanese_font(9)
+            pdf.set_draw_color(200, 200, 200)
+            pdf.line(pdf.l_margin, pdf.get_y(), pdf.l_margin + effective_width, pdf.get_y())
+            pdf.ln(5)
+
+            pdf.set_japanese_font(8)
             pdf.set_text_color(128, 128, 128)
             footer_text = f"作成日時: {datetime.now().strftime('%Y年%m月%d日 %H:%M')}"
-            pdf.cell(0, 6, footer_text, new_x="LMARGIN", new_y="NEXT", align='C')
+            pdf.cell(effective_width, 6, footer_text, align='R')
 
             # PDF保存
             pdf.output(output_path)
