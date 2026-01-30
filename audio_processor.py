@@ -69,6 +69,7 @@ class AudioProcessor:
     def process_audio(self, file_path: str) -> List[str]:
         """
         音声ファイルを処理（圧縮のみ、分割なし）
+        メモリ効率のため、ffmpegを優先使用
 
         Args:
             file_path: 入力音声ファイルのパス
@@ -78,38 +79,46 @@ class AudioProcessor:
         """
         try:
             file_size = os.path.getsize(file_path)
-            logger.info(f"入力ファイルサイズ: {file_size / (1024 * 1024):.2f} MB")
+            file_size_mb = file_size / (1024 * 1024)
+            logger.info(f"入力ファイルサイズ: {file_size_mb:.2f} MB")
 
-            # PyDubが使えない場合
-            if not PYDUB_AVAILABLE:
-                if FFMPEG_AVAILABLE:
-                    logger.info("ffmpegを使用してファイルを圧縮します")
-                    return [self._compress_with_ffmpeg(file_path)]
-                else:
-                    logger.warning("音声処理機能が無効のため、元のファイルをそのまま使用します")
-                    _, ext = os.path.splitext(file_path)
-                    output_path = tempfile.mktemp(suffix=ext)
-                    shutil.copy2(file_path, output_path)
-                    self.temp_files.append(output_path)
-                    return [output_path]
+            # 大きなファイル（50MB以上）または常にffmpegを優先使用（メモリ効率が良い）
+            if FFMPEG_AVAILABLE:
+                logger.info("ffmpegを使用してファイルを圧縮します（メモリ効率優先）")
+                return [self._compress_with_ffmpeg(file_path)]
 
-            # PyDubで音声ファイルを読み込み
-            audio = AudioSegment.from_file(file_path)
-            duration_minutes = len(audio) / (1000 * 60)
-            logger.info(
-                f"音声情報 - 長さ: {duration_minutes:.2f}分, "
-                f"チャンネル: {audio.channels}, サンプルレート: {audio.frame_rate}Hz"
-            )
+            # ffmpegが使えない場合のみPyDubを使用
+            if PYDUB_AVAILABLE:
+                logger.info("PyDubを使用してファイルを圧縮します")
+                # PyDubで音声ファイルを読み込み
+                audio = AudioSegment.from_file(file_path)
+                duration_minutes = len(audio) / (1000 * 60)
+                logger.info(
+                    f"音声情報 - 長さ: {duration_minutes:.2f}分, "
+                    f"チャンネル: {audio.channels}, サンプルレート: {audio.frame_rate}Hz"
+                )
 
-            # 圧縮処理
-            logger.info("音声ファイルを圧縮します（モノラル、16kHz）")
-            audio = self._compress_audio(audio)
+                # 圧縮処理
+                logger.info("音声ファイルを圧縮します（モノラル、16kHz）")
+                audio = self._compress_audio(audio)
 
-            # 圧縮済みファイルを出力
-            output_path = tempfile.mktemp(suffix=".mp3")
-            audio.export(output_path, format="mp3", bitrate=self.TARGET_BITRATE)
-            output_size = os.path.getsize(output_path)
-            logger.info(f"圧縮完了 - 出力サイズ: {output_size / (1024 * 1024):.2f} MB")
+                # 圧縮済みファイルを出力
+                output_path = tempfile.mktemp(suffix=".mp3")
+                audio.export(output_path, format="mp3", bitrate=self.TARGET_BITRATE)
+                output_size = os.path.getsize(output_path)
+                logger.info(f"圧縮完了 - 出力サイズ: {output_size / (1024 * 1024):.2f} MB")
+                self.temp_files.append(output_path)
+
+                # メモリ解放
+                del audio
+
+                return [output_path]
+
+            # どちらも使えない場合
+            logger.warning("音声処理機能が無効のため、元のファイルをそのまま使用します")
+            _, ext = os.path.splitext(file_path)
+            output_path = tempfile.mktemp(suffix=ext)
+            shutil.copy2(file_path, output_path)
             self.temp_files.append(output_path)
             return [output_path]
 

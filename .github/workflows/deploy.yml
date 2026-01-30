@@ -38,7 +38,7 @@ jobs:
             --region $REGION \
             --platform managed \
             --allow-unauthenticated \
-            --memory 4Gi \
+            --memory 8Gi \
             --cpu 2 \
             --timeout 3600 \
             --min-instances 1 \
