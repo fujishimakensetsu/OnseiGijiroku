@@ -286,7 +286,12 @@ async def upload_audio(
                 detail="GCSが設定されていません"
             )
 
-        logger.info(f"ユーザー {current_user} がGCSから音声ファイルを処理: {blob_name}")
+        import time
+        start_time = time.time()
+
+        logger.info(f"=== 音声処理開始 ===")
+        logger.info(f"ユーザー: {current_user}")
+        logger.info(f"ファイル: {blob_name}")
 
         # 動的タイトルの生成
         dynamic_title = f"{created_date}_{creator}_{customer_name}_{meeting_place}_議事録"
@@ -297,7 +302,13 @@ async def upload_audio(
 
         try:
             # GCSからファイルをダウンロード
+            logger.info("[Step 1/4] GCSからファイルをダウンロード中...")
             blob = bucket.blob(blob_name)
+
+            # ファイルサイズを確認
+            blob.reload()
+            file_size_mb = blob.size / (1024 * 1024) if blob.size else 0
+            logger.info(f"ファイルサイズ: {file_size_mb:.2f} MB")
 
             # 一時ファイルに保存
             file_extension = os.path.splitext(blob_name)[1]
@@ -305,26 +316,37 @@ async def upload_audio(
                 blob.download_to_file(temp_file)
                 temp_file_path = temp_file.name
 
-            logger.info(f"GCSからダウンロード完了: {blob_name} -> {temp_file_path}")
+            download_time = time.time() - start_time
+            logger.info(f"[Step 1/4] ダウンロード完了 ({download_time:.2f}秒)")
 
             # 音声ファイルの処理（圧縮のみ）
-            logger.info("音声ファイルの処理を開始")
+            logger.info("[Step 2/4] 音声ファイルを圧縮中...")
+            compress_start = time.time()
             processed_files = audio_processor.process_audio(temp_file_path)
             processed_file = processed_files[0]
 
-            logger.info(f"音声ファイルの圧縮完了")
+            # 圧縮後のファイルサイズ
+            compressed_size_mb = os.path.getsize(processed_file) / (1024 * 1024)
+            compress_time = time.time() - compress_start
+            logger.info(f"[Step 2/4] 圧縮完了 ({compress_time:.2f}秒) - 圧縮後サイズ: {compressed_size_mb:.2f} MB")
 
             # Gemini APIで音声解析
-            logger.info("Gemini APIで音声解析開始")
+            logger.info("[Step 3/4] Gemini APIで音声解析中...")
+            gemini_start = time.time()
             final_summary = await gemini_service.analyze_audio(processed_file)
-            logger.info(f"解析完了 - 議事録の文字数: {len(final_summary)}")
+            gemini_time = time.time() - gemini_start
+            logger.info(f"[Step 3/4] 解析完了 ({gemini_time:.2f}秒) - 議事録文字数: {len(final_summary)}")
 
             # GCSからファイルを削除（処理完了後）
+            logger.info("[Step 4/4] クリーンアップ中...")
             try:
                 blob.delete()
                 logger.info(f"GCSファイル削除: {blob_name}")
             except Exception as e:
                 logger.warning(f"GCSファイル削除エラー: {blob_name} - {str(e)}")
+
+            total_time = time.time() - start_time
+            logger.info(f"=== 音声処理完了 (合計: {total_time:.2f}秒) ===")
 
             return MinutesResponse(
                 summary=final_summary,
@@ -347,8 +369,12 @@ async def upload_audio(
                 except Exception as e:
                     logger.warning(f"処理済みファイル削除エラー: {processed_file} - {str(e)}")
 
+    except HTTPException:
+        raise
     except Exception as e:
+        import traceback
         logger.error(f"音声処理エラー: {str(e)}")
+        logger.error(f"スタックトレース: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"音声ファイルの処理中にエラーが発生しました: {str(e)}"

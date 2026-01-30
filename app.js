@@ -293,7 +293,11 @@ async function processAudioFromGCS(blobName, token) {
             const contentType = response.headers.get('content-type');
             let errorMessage = '音声解析に失敗しました';
 
-            if (contentType && contentType.includes('application/json')) {
+            if (response.status === 503) {
+                errorMessage = 'サーバーが一時的に利用できません。ファイルサイズが大きい場合は、数分後に再度お試しください。';
+            } else if (response.status === 504) {
+                errorMessage = '処理がタイムアウトしました。ファイルサイズを小さくするか、音声を分割してお試しください。';
+            } else if (contentType && contentType.includes('application/json')) {
                 try {
                     const error = await response.json();
                     errorMessage = error.detail || errorMessage;
