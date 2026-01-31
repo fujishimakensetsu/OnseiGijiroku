@@ -64,23 +64,24 @@ class GeminiService:
         
         # 音声解析プロンプト（議事録を生成）
         self.prompt = """あなたは注文住宅会社の優秀な営業アシスタントです。
-この音声ファイルを最初から最後まで完全に聴き、議事録を作成してください。
+この音声ファイルを聴いて、議事録を作成してください。
 
-【最重要指示】
-・音声ファイル全体（冒頭から終盤まで）を漏れなく確認し、全ての内容を議事録に含めてください
-・出力は必ず「5. 補足メモ」まで完成させてください。途中で終わらせないでください
-・長い音声の場合でも、全ての議題を網羅してください
+【絶対禁止事項】
+・同じ内容や文章を繰り返し出力しないでください
+・一度書いた項目を再度書かないでください
+・類似の箇条書きを連続して並べないでください
+・「屋外」「設置」などの単語を連続で繰り返さないでください
 
 【出力方針】
 ・全文の文字起こしは不要です。要点を整理してまとめてください
 ・金額、サイズ、色、品番などの具体的な数値情報は必ず含めてください
-・音声で言及された全ての議題・トピックを含めてください
+・各議題は1回だけ簡潔に記載してください
+・出力は必ず「5. 補足メモ」まで完成させてください
 
 【出力形式】必ず以下の5セクション構成で出力してください。
 箇条書きには「・」のみ使用してください。
 強調したい語句は【】で囲んでください（例：【ロッカーについて】）。
 「*」「#」「**」などの記号は絶対に使用しないでください。
-必ず5番まで全て出力を完了してください。
 
 1. 打合せ概要
 打合せの目的や主なテーマを2〜3行で記載
@@ -89,11 +90,9 @@ class GeminiService:
 話し合われた主要な内容を議題ごとに箇条書きで記載
 ・【議題名】についての要点
 ・間取りや設計に関する要望・変更点
-・設備・仕様についての決定・検討事項（キッチン、バス、トイレ、床材、壁紙など）
+・設備・仕様についての決定・検討事項
 ・予算や費用に関する話
 ・スケジュール・工期に関する話
-・その他話し合われた全ての内容
-・各議題は簡潔にまとめ、具体的な数値情報は含める
 
 3. 決定事項
 この打合せで確定・決定したことを箇条書きで記載
@@ -107,10 +106,7 @@ class GeminiService:
 ※該当がなければ「特になし」
 
 5. 補足メモ
-その他の気づきや注意点（なければ「特になし」）
-
-【最終確認】
-上記5セクション全てを出力してください。「5. 補足メモ」を書き終えるまで出力を続けてください。"""
+その他の気づきや注意点（なければ「特になし」）"""
     
     async def analyze_audio(self, audio_file_path: str) -> str:
         """
@@ -166,8 +162,8 @@ class GeminiService:
                 response = self.model.generate_content(
                     [self.prompt, audio_file],
                     generation_config=genai.types.GenerationConfig(
-                        temperature=0.3,  # 創造性を抑えて正確性を重視
-                        max_output_tokens=32000,  # 十分な出力を確保（8000→32000）
+                        temperature=0.1,  # 創造性を最小限に抑えて重複を防止
+                        max_output_tokens=16000,  # 出力トークン数を適正化
                     )
                 )
                 analysis_time = time.time() - analysis_start_time
@@ -211,6 +207,9 @@ class GeminiService:
             if "5. 補足メモ" not in result_text and "## 5." not in result_text:
                 logger.warning("議事録の出力が不完全な可能性があります（セクション5が見つかりません）")
 
+            # 重複行を検出・削除する後処理
+            result_text = self._remove_duplicate_lines(result_text)
+
             # アップロードしたファイルを削除
             try:
                 genai.delete_file(audio_file.name)
@@ -223,4 +222,95 @@ class GeminiService:
         except Exception as e:
             logger.error(f"Gemini API解析エラー: {str(e)}")
             raise
+
+    def _remove_duplicate_lines(self, text: str) -> str:
+        """
+        重複行を検出・削除する後処理
+
+        Args:
+            text: 入力テキスト
+
+        Returns:
+            重複を削除したテキスト
+        """
+        lines = text.split('\n')
+        result_lines = []
+        seen_lines = set()
+        consecutive_similar_count = 0
+        prev_line_normalized = ""
+
+        for line in lines:
+            # 空行はそのまま追加
+            if not line.strip():
+                result_lines.append(line)
+                consecutive_similar_count = 0
+                continue
+
+            # 正規化（比較用）- 空白を除去して比較
+            normalized = line.strip()
+
+            # 完全に同じ行が連続している場合はスキップ
+            if normalized == prev_line_normalized:
+                consecutive_similar_count += 1
+                if consecutive_similar_count >= 2:
+                    logger.debug(f"重複行をスキップ: {line[:50]}...")
+                    continue
+            else:
+                consecutive_similar_count = 0
+
+            # 類似度チェック（同じ接頭辞で始まる箇条書きの連続）
+            if normalized.startswith('・') and prev_line_normalized.startswith('・'):
+                # 箇条書きの内容部分を比較
+                current_content = normalized[1:].strip()
+                prev_content = prev_line_normalized[1:].strip() if prev_line_normalized else ""
+
+                # 同じ内容が繰り返されている場合はスキップ
+                if current_content and prev_content:
+                    # 80%以上同じ場合は重複とみなす
+                    if self._similarity_ratio(current_content, prev_content) > 0.8:
+                        logger.debug(f"類似行をスキップ: {line[:50]}...")
+                        continue
+
+            # セクション見出し（1. 2. 3. など）は重複チェックを厳格に
+            if len(normalized) > 0 and normalized[0].isdigit() and '. ' in normalized[:5]:
+                section_key = normalized[:5]
+                if section_key in seen_lines:
+                    logger.debug(f"重複セクションをスキップ: {line[:50]}...")
+                    continue
+                seen_lines.add(section_key)
+
+            result_lines.append(line)
+            prev_line_normalized = normalized
+
+        result = '\n'.join(result_lines)
+
+        # 削除された行数をログ出力
+        removed_count = len(lines) - len(result_lines)
+        if removed_count > 0:
+            logger.info(f"重複行を{removed_count}行削除しました")
+
+        return result
+
+    def _similarity_ratio(self, str1: str, str2: str) -> float:
+        """
+        2つの文字列の類似度を計算（簡易版）
+
+        Args:
+            str1: 文字列1
+            str2: 文字列2
+
+        Returns:
+            類似度（0.0〜1.0）
+        """
+        if not str1 or not str2:
+            return 0.0
+
+        # 短い方の文字列を基準に
+        shorter = str1 if len(str1) <= len(str2) else str2
+        longer = str2 if len(str1) <= len(str2) else str1
+
+        # 共通の文字数をカウント
+        common_chars = sum(1 for c in shorter if c in longer)
+
+        return common_chars / len(longer) if longer else 0.0
     
