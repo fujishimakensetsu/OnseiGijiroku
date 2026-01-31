@@ -23,9 +23,34 @@ class JapanesePDF(FPDF):
         self.font_name = None
         self._setup_japanese_font()
 
+    def _get_bundled_font_path(self):
+        """プロジェクト同梱フォントのパスを取得"""
+        # このファイルのディレクトリを基準にfontsフォルダを探す
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        font_candidates = [
+            os.path.join(base_dir, "fonts", "NotoSansJP-Regular.ttf"),
+            os.path.join(base_dir, "fonts", "NotoSansCJKjp-Regular.otf"),
+            os.path.join(base_dir, "fonts", "NotoSansJP-Regular.otf"),
+        ]
+        for font_path in font_candidates:
+            if os.path.exists(font_path):
+                return font_path
+        return None
+
     def _setup_japanese_font(self):
         """日本語フォントを設定"""
-        # 日本語フォントパス（各OS用）
+        # 1. まずプロジェクト同梱のフォントを優先（環境非依存）
+        bundled_font = self._get_bundled_font_path()
+        if bundled_font:
+            try:
+                self.add_font("NotoSansJP", fname=bundled_font)
+                self.font_name = "NotoSansJP"
+                logger.info(f"同梱フォント登録成功: {bundled_font}")
+                return
+            except Exception as e:
+                logger.warning(f"同梱フォント登録失敗: {bundled_font} - {str(e)}")
+
+        # 2. システムフォントにフォールバック
         font_paths = [
             # Windows
             ("C:\\Windows\\Fonts\\msgothic.ttc", "MSGothic"),
@@ -47,7 +72,6 @@ class JapanesePDF(FPDF):
         for font_path, font_name in font_paths:
             if os.path.exists(font_path):
                 try:
-                    # fpdf2 2.x系ではuni=Trueは不要（自動検出）
                     self.add_font(font_name, fname=font_path)
                     self.font_name = font_name
                     logger.info(f"日本語フォント登録成功: {font_path}")
@@ -56,7 +80,7 @@ class JapanesePDF(FPDF):
                     logger.warning(f"フォント登録失敗: {font_path} - {str(e)}")
                     continue
 
-        # フォントが見つからない場合、globで検索
+        # 3. フォントが見つからない場合、globで検索
         search_patterns = [
             "/usr/share/fonts/**/NotoSans*CJK*.ttc",
             "/usr/share/fonts/**/NotoSans*CJK*.otf",
@@ -70,7 +94,6 @@ class JapanesePDF(FPDF):
                 if found_fonts:
                     font_path = found_fonts[0]
                     try:
-                        # fpdf2 2.x系ではuni=Trueは不要（自動検出）
                         self.add_font("JapaneseFont", fname=font_path)
                         self.font_name = "JapaneseFont"
                         logger.info(f"日本語フォント登録成功（glob検索）: {font_path}")

@@ -25,6 +25,9 @@ COPY index.html .
 COPY dashboard.html .
 COPY app.js .
 
+# フォントフォルダをコピー（日本語PDF出力用）
+COPY fonts/ ./fonts/
+
 # ポート8080を公開
 EXPOSE 8080
 
